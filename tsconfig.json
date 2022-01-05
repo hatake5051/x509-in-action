@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "target": "ES2021",
+    "module": "es6",
+    "strict": true,
+    "outDir": "./build",
+    "moduleResolution": "Node",
+    "baseUrl": "./src",
+    "removeComments": false,
+    "noUncheckedIndexedAccess": true
+  },
+  "include": ["src/**/*.ts"]
+}
