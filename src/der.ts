@@ -131,6 +131,9 @@ const DER = {
         contents: contentsOctets,
       };
     }
+    if (isASN1Value(asn1, { SEQUENCE: 'unknown' })) {
+      console.log('ABCDE');
+    }
     throw new TypeError('not implemented');
   },
   decode: <T extends ASN1Type>(der: Uint8Array, t: T): ASN1Value<T> => {

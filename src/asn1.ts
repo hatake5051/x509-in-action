@@ -53,6 +53,36 @@ function isASN1Type<T extends ASN1Type = ASN1Type>(arg: unknown, t?: T): arg is 
   return isASN1Type(arg) && equalsASN1Type(arg, t);
 }
 
+// type ASN1TypeName = ASN1SimpleType | 'SEQUENCE' | 'IMPLICIT' | 'EXPLICIT' | 'ANY';
+// type ASN1TypeFromName<N extends ASN1TypeName> = N extends ASN1SimpleType
+//   ? N
+//   : N extends 'SEQUENCE'
+//   ? ASN1SEQUENCEType
+//   : N extends 'IMPLICIT'
+//   ? ASN1ImplicitlyTaggedType
+//   : N extends 'EXPLICIT'
+//   ? ASN1ExplicitlyTaggedType
+//   : N extends 'ANY'
+//   ? 'ANY'
+//   : never;
+
+// function isASN1Type<N extends ASN1TypeName = ASN1TypeName>(
+//   arg: unknown,
+//   name?: N
+// ): arg is ASN1TypeFromName<N> {
+//   if (name == null) {
+//     return (
+//       isASN1SimpleType(arg) ||
+//       isASN1StructuredType(arg) ||
+//       isASN1TaggedType(arg) ||
+//       isASN1OtherType(arg)
+//     );
+//   }
+//   if (['NULL', 'INTEGER'].includes(name)) return isASN1SimpleType(arg);
+//   if (['SEQUENCE'].includes(name)) return isASN1StructuredValue(arg);
+
+// }
+
 function equalsASN1Type(l?: ASN1Type, r?: ASN1Type): boolean {
   if (l == null && r == null) return true;
   if (l == null || r == null) return false;
@@ -143,15 +173,6 @@ function isASN1SimpleValue<T extends ASN1SimpleType>(
   value: unknown,
   t: T
 ): value is ASN1SimpleType_to_TSType<T> {
-  // if (t == null) {
-  //   return (
-  //     typeof value === 'bigint' ||
-  //     value instanceof Uint8Array ||
-  //     value == null ||
-  //     (Array.isArray(value) && value.every((x) => typeof x === 'number')) ||
-  //     typeof value === 'string'
-  //   );
-  // }
   switch (t) {
     case 'INTEGER':
       return typeof value === 'bigint';
@@ -174,32 +195,56 @@ function isASN1SimpleValue<T extends ASN1SimpleType>(
  */
 type ASN1StructuredType = ASN1SEQUENCEType | ASN1SEQUENCEOFType | ASN1SETOFType;
 
-const isASN1StructuredType = (arg: unknown): arg is ASN1StructuredType =>
-  (isObject<ASN1SEQUENCEType>(arg) &&
-    typeof arg.SEQUENCE === 'object' &&
-    arg.SEQUENCE != null &&
-    Object.values(arg.SEQUENCE).every((t) => isASN1Type(t))) ||
-  (isObject<ASN1SEQUENCEOFType>(arg) && isASN1Type(arg.SEQUENCEOF)) ||
-  (isObject<ASN1SETOFType>(arg) && isASN1Type(arg.SETOF));
+function isASN1StructuredType(arg: unknown): arg is ASN1StructuredType {
+  if (isObject<ASN1SEQUENCEType>(arg)) {
+    if (arg.order == null) {
+      return arg.SEQUENCE === 'unknown';
+    }
+    // if arg.order has a value
+    return (
+      Array.isArray(arg.order) &&
+      arg.order.every((k) => typeof k === 'string') &&
+      isObject<Exclude<ASN1SEQUENCEType['SEQUENCE'], 'unknown'>>(arg.SEQUENCE) &&
+      Object.entries(arg.SEQUENCE).every(
+        ([k, v]) =>
+          (arg.order as string[]).includes(k) &&
+          ((isObject<{ OPTIONAL: unknown }>(v) && isASN1Type(v.OPTIONAL)) || isASN1Type(v))
+      )
+    );
+  }
+  if (isObject<ASN1SEQUENCEOFType>(arg)) {
+    return isASN1Type(arg.SEQUENCEOF);
+  }
+  if (isObject<ASN1SETOFType>(arg)) {
+    return isASN1Type(arg.SETOF);
+  }
+  return false;
+}
 
 function equalsASN1StructuredType(l?: ASN1StructuredType, r?: ASN1StructuredType): boolean {
   if (l == null && r == null) return true;
   if (l == null || r == null) return false;
   if ('SEQUENCE' in l) {
+    if (l.order == null) {
+      return 'SEQUENCE' in r && l.SEQUENCE === 'unknown';
+    }
     return (
       'SEQUENCE' in r &&
-      Object.entries(l.SEQUENCE).every(([tk, tv]) => {
-        const tl = isASN1Type(tv) ? tv : tv.OPTIONAL;
-        const x = r.SEQUENCE[tk];
-        const tr = isASN1Type(x) ? x : x?.OPTIONAL;
-        return equalsASN1Type(tr, tl);
-      }) &&
-      Object.entries(r.SEQUENCE).every(([tk, tv]) => {
-        const tr = isASN1Type(tv) ? tv : tv.OPTIONAL;
-        const x = l.SEQUENCE[tk];
-        const tl = isASN1Type(x) ? x : x?.OPTIONAL;
-        return equalsASN1Type(tr, tl);
-      })
+      ((r.order == null && r.SEQUENCE === 'unknown') ||
+        (Array.isArray(l.order) &&
+          Array.isArray(r.order) &&
+          new Set(l.order).size === new Set(r.order).size &&
+          l.order.every((ll) => (r.order as string[]).includes(ll)) &&
+          l.SEQUENCE !== 'unknown' &&
+          r.SEQUENCE !== 'unknown' &&
+          l.order.every((k) => {
+            const lk = (l.SEQUENCE as Exclude<ASN1SEQUENCEType['SEQUENCE'], 'unknown'>)[k];
+            const rk = (r.SEQUENCE as Exclude<ASN1SEQUENCEType['SEQUENCE'], 'unknown'>)[k];
+            return equalsASN1Type(
+              isASN1Type(lk) ? lk : lk?.OPTIONAL,
+              isASN1Type(rk) ? rk : rk?.OPTIONAL
+            );
+          })))
     );
   }
   if ('SEQUENCEOF' in l) {
@@ -211,20 +256,26 @@ function equalsASN1StructuredType(l?: ASN1StructuredType, r?: ASN1StructuredType
   return false;
 }
 
+type UnknownableASN1StructuredType<T extends ASN1StructuredType> = T extends ASN1SEQUENCEType
+  ? { [P in keyof T]: T[P] extends 'unknown' ? unknown : T[P] }
+  : T;
+
 type FilteredKey<T, U> = { [P in keyof T]: T[P] extends U ? P : never }[keyof T];
 
 type ASN1StructuredType_to_TSType<T extends ASN1StructuredType> = T extends ASN1SEQUENCEType
-  ? {
-      [P in FilteredKey<T['SEQUENCE'], ASN1Type>]: T['SEQUENCE'][P] extends ASN1Type
-        ? ASN1Type_to_TSType<T['SEQUENCE'][P]>
-        : never;
-    } & {
-      [P in FilteredKey<T['SEQUENCE'], { OPTIONAL: ASN1Type }>]?: T['SEQUENCE'][P] extends {
-        OPTIONAL: ASN1Type;
+  ? T['SEQUENCE'] extends 'unknown'
+    ? unknown
+    : {
+        [P in FilteredKey<T['SEQUENCE'], ASN1Type>]: T['SEQUENCE'][P] extends ASN1Type
+          ? ASN1Type_to_TSType<T['SEQUENCE'][P]>
+          : never;
+      } & {
+        [P in FilteredKey<T['SEQUENCE'], { OPTIONAL: ASN1Type }>]?: T['SEQUENCE'][P] extends {
+          OPTIONAL: ASN1Type;
+        }
+          ? ASN1Type_to_TSType<T['SEQUENCE'][P]['OPTIONAL']>
+          : never;
       }
-        ? ASN1Type_to_TSType<T['SEQUENCE'][P]['OPTIONAL']>
-        : never;
-    }
   : T extends ASN1SEQUENCEOFType
   ? Array<ASN1Type_to_TSType<T['SEQUENCEOF']>>
   : T extends ASN1SETOFType
@@ -237,8 +288,9 @@ function isASN1StructuredValue<T extends ASN1StructuredType>(
 ): value is ASN1StructuredType_to_TSType<T> {
   if ('SEQUENCE' in t) {
     if (!(typeof value === 'object' && value != null)) return false;
+    if (t.SEQUENCE === 'unknown') return true;
     return Object.entries(value).every(([k, v]) => {
-      const x = t.SEQUENCE[k];
+      const x = (t.SEQUENCE as Exclude<ASN1SEQUENCEType['SEQUENCE'], 'unknown'>)[k];
       const tt = isASN1Type(x) ? x : x?.OPTIONAL;
       return tt != null && isASN1Value(v, tt);
     });
@@ -256,7 +308,10 @@ function isASN1StructuredValue<T extends ASN1StructuredType>(
   return false;
 }
 
-type ASN1SEQUENCEType = { SEQUENCE: Record<string, ASN1Type | { OPTIONAL: ASN1Type }> };
+export type ASN1SEQUENCEType<S extends string = string> = {
+  SEQUENCE: Record<S, ASN1Type | { OPTIONAL: ASN1Type }> | 'unknown';
+  order?: S[];
+};
 
 const ASN1SEQUENCE = <S extends string, T extends Record<S, ASN1Type | { OPTIONAL: ASN1Type }>>(
   s: T,

@@ -221,3 +221,23 @@ console.log(
   )
 );
 console.groupEnd();
+
+console.group('SEQUENCE check');
+const sequence = ASN1SEQUENCE(
+  {
+    version: ASN1ExplicitTag(0 as ASN1TagNumber, 'INTEGER'),
+    serialNumber: 'INTEGER',
+  },
+  ['version', 'serialNumber']
+);
+eq(sequence, { SEQUENCE: 'unknown' });
+const asn1_sequence: ASN1Value<typeof sequence> = {
+  t: sequence,
+  v: {
+    version: { v: 2n },
+    serialNumber: 143266986699090766294700635381230934788665930n,
+  },
+};
+const der_sequence = DER.encode(asn1_sequence);
+console.log(der_sequence);
+console.groupEnd();

@@ -44,6 +44,33 @@ function isASN1Type(arg, t) {
     }
     return isASN1Type(arg) && equalsASN1Type(arg, t);
 }
+// type ASN1TypeName = ASN1SimpleType | 'SEQUENCE' | 'IMPLICIT' | 'EXPLICIT' | 'ANY';
+// type ASN1TypeFromName<N extends ASN1TypeName> = N extends ASN1SimpleType
+//   ? N
+//   : N extends 'SEQUENCE'
+//   ? ASN1SEQUENCEType
+//   : N extends 'IMPLICIT'
+//   ? ASN1ImplicitlyTaggedType
+//   : N extends 'EXPLICIT'
+//   ? ASN1ExplicitlyTaggedType
+//   : N extends 'ANY'
+//   ? 'ANY'
+//   : never;
+// function isASN1Type<N extends ASN1TypeName = ASN1TypeName>(
+//   arg: unknown,
+//   name?: N
+// ): arg is ASN1TypeFromName<N> {
+//   if (name == null) {
+//     return (
+//       isASN1SimpleType(arg) ||
+//       isASN1StructuredType(arg) ||
+//       isASN1TaggedType(arg) ||
+//       isASN1OtherType(arg)
+//     );
+//   }
+//   if (['NULL', 'INTEGER'].includes(name)) return isASN1SimpleType(arg);
+//   if (['SEQUENCE'].includes(name)) return isASN1StructuredValue(arg);
+// }
 function equalsASN1Type(l, r) {
     if (l == null && r == null)
         return true;
@@ -89,15 +116,6 @@ const ASN1SimpleTypeList = [
 ];
 const isASN1SimpleType = (arg) => ASN1SimpleTypeList.some((t) => arg === t);
 function isASN1SimpleValue(value, t) {
-    // if (t == null) {
-    //   return (
-    //     typeof value === 'bigint' ||
-    //     value instanceof Uint8Array ||
-    //     value == null ||
-    //     (Array.isArray(value) && value.every((x) => typeof x === 'number')) ||
-    //     typeof value === 'string'
-    //   );
-    // }
     switch (t) {
         case 'INTEGER':
             return typeof value === 'bigint';
@@ -113,31 +131,48 @@ function isASN1SimpleValue(value, t) {
             return false;
     }
 }
-const isASN1StructuredType = (arg) => (isObject(arg) &&
-    typeof arg.SEQUENCE === 'object' &&
-    arg.SEQUENCE != null &&
-    Object.values(arg.SEQUENCE).every((t) => isASN1Type(t))) ||
-    (isObject(arg) && isASN1Type(arg.SEQUENCEOF)) ||
-    (isObject(arg) && isASN1Type(arg.SETOF));
+function isASN1StructuredType(arg) {
+    if (isObject(arg)) {
+        if (arg.order == null) {
+            return arg.SEQUENCE === 'unknown';
+        }
+        // if arg.order has a value
+        return (Array.isArray(arg.order) &&
+            arg.order.every((k) => typeof k === 'string') &&
+            isObject(arg.SEQUENCE) &&
+            Object.entries(arg.SEQUENCE).every(([k, v]) => arg.order.includes(k) &&
+                ((isObject(v) && isASN1Type(v.OPTIONAL)) || isASN1Type(v))));
+    }
+    if (isObject(arg)) {
+        return isASN1Type(arg.SEQUENCEOF);
+    }
+    if (isObject(arg)) {
+        return isASN1Type(arg.SETOF);
+    }
+    return false;
+}
 function equalsASN1StructuredType(l, r) {
     if (l == null && r == null)
         return true;
     if (l == null || r == null)
         return false;
     if ('SEQUENCE' in l) {
+        if (l.order == null) {
+            return 'SEQUENCE' in r && l.SEQUENCE === 'unknown';
+        }
         return ('SEQUENCE' in r &&
-            Object.entries(l.SEQUENCE).every(([tk, tv]) => {
-                const tl = isASN1Type(tv) ? tv : tv.OPTIONAL;
-                const x = r.SEQUENCE[tk];
-                const tr = isASN1Type(x) ? x : x?.OPTIONAL;
-                return equalsASN1Type(tr, tl);
-            }) &&
-            Object.entries(r.SEQUENCE).every(([tk, tv]) => {
-                const tr = isASN1Type(tv) ? tv : tv.OPTIONAL;
-                const x = l.SEQUENCE[tk];
-                const tl = isASN1Type(x) ? x : x?.OPTIONAL;
-                return equalsASN1Type(tr, tl);
-            }));
+            ((r.order == null && r.SEQUENCE === 'unknown') ||
+                (Array.isArray(l.order) &&
+                    Array.isArray(r.order) &&
+                    new Set(l.order).size === new Set(r.order).size &&
+                    l.order.every((ll) => r.order.includes(ll)) &&
+                    l.SEQUENCE !== 'unknown' &&
+                    r.SEQUENCE !== 'unknown' &&
+                    l.order.every((k) => {
+                        const lk = l.SEQUENCE[k];
+                        const rk = r.SEQUENCE[k];
+                        return equalsASN1Type(isASN1Type(lk) ? lk : lk?.OPTIONAL, isASN1Type(rk) ? rk : rk?.OPTIONAL);
+                    }))));
     }
     if ('SEQUENCEOF' in l) {
         return 'SEQUENCEOF' in r && equalsASN1Type(l.SEQUENCEOF, r.SEQUENCEOF);
@@ -151,6 +186,8 @@ function isASN1StructuredValue(value, t) {
     if ('SEQUENCE' in t) {
         if (!(typeof value === 'object' && value != null))
             return false;
+        if (t.SEQUENCE === 'unknown')
+            return true;
         return Object.entries(value).every(([k, v]) => {
             const x = t.SEQUENCE[k];
             const tt = isASN1Type(x) ? x : x?.OPTIONAL;
@@ -335,6 +372,9 @@ const DER = {
                 length: lengthOctets,
                 contents: contentsOctets,
             };
+        }
+        if (isASN1Value(asn1, { SEQUENCE: 'unknown' })) {
+            console.log('ABCDE');
         }
         throw new TypeError('not implemented');
     },
@@ -652,4 +692,20 @@ const asn1_explicitTagged = {
 };
 const der_explicitTagged = DER.encode(asn1_explicitTagged);
 console.log(der_explicitTagged, DER.decode(CONCAT(der_explicitTagged.identifier, CONCAT(der_explicitTagged.length, der_explicitTagged.contents)), explicitTagged));
+console.groupEnd();
+console.group('SEQUENCE check');
+const sequence = ASN1SEQUENCE({
+    version: ASN1ExplicitTag(0, 'INTEGER'),
+    serialNumber: 'INTEGER',
+}, ['version', 'serialNumber']);
+eq(sequence, { SEQUENCE: 'unknown' });
+const asn1_sequence = {
+    t: sequence,
+    v: {
+        version: { v: 2n },
+        serialNumber: 143266986699090766294700635381230934788665930n,
+    },
+};
+const der_sequence = DER.encode(asn1_sequence);
+console.log(der_sequence);
 console.groupEnd();
