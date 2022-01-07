@@ -236,7 +236,7 @@ type ASN1StructuredTypeFromName<N extends ASN1StructuredTypeName> = N extends 'S
   : never;
 
 function isASN1StructuredType(arg: unknown): arg is ASN1StructuredType {
-  if (isObject<ASN1SEQUENCEType>(arg)) {
+  if (isObject<ASN1SEQUENCEType>(arg) && 'SEQUENCE' in arg) {
     return (
       Array.isArray(arg.order) &&
       arg.order.every((k) => typeof k === 'string') &&
@@ -249,10 +249,10 @@ function isASN1StructuredType(arg: unknown): arg is ASN1StructuredType {
       )
     );
   }
-  if (isObject<ASN1SEQUENCEOFType>(arg)) {
+  if (isObject<ASN1SEQUENCEOFType>(arg) && 'SEQUENCEOF' in arg) {
     return isASN1Type(arg.SEQUENCEOF);
   }
-  if (isObject<ASN1SETOFType>(arg)) {
+  if (isObject<ASN1SETOFType>(arg) && 'SETOF' in arg) {
     return isASN1Type(arg.SETOF);
   }
   return false;

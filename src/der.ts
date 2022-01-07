@@ -75,6 +75,24 @@ export { DER };
  */
 type DERMethod = 'Primitive' | 'Constructed';
 
+function ASN1Type_to_DERMethod(t: ASN1Type): DERMethod {
+  if (t === 'ANY') throw new TypeError('ANY  は DER encode できません');
+  if (
+    t === 'BOOLEAN' ||
+    t === 'INTEGER' ||
+    t === 'BIT STRING' ||
+    t === 'OCTET STRING' ||
+    t === 'NULL' ||
+    t === 'OBJECT IDENTIFIER' ||
+    t === 'UTCTime'
+  )
+    return 'Primitive';
+  if ('EXPLICIT' in t || 'SEQUENCE' in t || 'SEQUENCEOF' in t || 'SETOF' in t) return 'Constructed';
+  if ('IMPLICIT' in t) return ASN1Type_to_DERMethod(t.t);
+  if ('CHOICE' in t) throw new TypeError(`${JSON.stringify(t)} は DER encode できない`);
+  throw new TypeError(`ASN1Type_to_DERMethod(${JSON.stringify(t)}) has not been implmented`);
+}
+
 type IdentifierOctets = Uint8Array & { _brand: 'IdentifierOctets' };
 type LengthOctets = Uint8Array & { _brand: 'LengthOctets' };
 type ContentsOctets = Uint8Array & { _brand: 'ContentsOctets' };
@@ -99,30 +117,28 @@ function encodeDER(asn1: ASN1Value): {
   len: LengthOctets;
   contents: ContentsOctets;
 } {
+  const id = DERIdentifierOctets.encode(ASN1Type_to_ASN1Tag(asn1.t), ASN1Type_to_DERMethod(asn1.t));
+  const ans = (contents: ContentsOctets) => ({
+    id,
+    len: DERLengthOctets.encode(contents.length),
+    contents,
+  });
   if (isASN1Value(asn1, 'NULL')) {
     const contents = DERContentsOctets_NULL.encode(asn1.v);
-    const id = DERIdentifierOctets.encode(ASN1Type_to_ASN1Tag(asn1.t), 'Primitive');
-    const len = DERLengthOctets.encode(contents.length);
-    return { id, len, contents };
+    return ans(contents);
   }
   if (isASN1Value(asn1, 'INTEGER')) {
     const contents = DERContentsOctets_INTEGER.encode(asn1.v);
-    const id = DERIdentifierOctets.encode(ASN1Type_to_ASN1Tag(asn1.t), 'Primitive');
-    const len = DERLengthOctets.encode(contents.length);
-    return { id, len, contents };
+    return ans(contents);
   }
   if (isASN1Value(asn1, 'IMPLICIT')) {
     const der = encodeDER({ v: asn1.v.v, t: asn1.t.t });
-    const { method } = DERIdentifierOctets.decode(der.id);
-    const id = DERIdentifierOctets.encode(ASN1Type_to_ASN1Tag(asn1.t), method);
     return { id, len: der.len, contents: der.contents };
   }
   if (isASN1Value(asn1, 'EXPLICIT')) {
     const component = encodeDER({ v: asn1.v.v, t: asn1.t.t });
     const contents = serialize(component) as ContentsOctets;
-    const id = DERIdentifierOctets.encode(ASN1Type_to_ASN1Tag(asn1.t), 'Constructed');
-    const len = DERLengthOctets.encode(contents.length);
-    return { id, len, contents };
+    return ans(contents);
   }
   if (isASN1Value(asn1, 'SEQUENCE')) {
     const contents = asn1.t.order.reduce((prev, id) => {
@@ -137,9 +153,14 @@ function encodeDER(asn1: ASN1Value): {
       const component = encodeDER({ v: asn1.v[id], t });
       return CONCAT(prev, serialize(component));
     }, new Uint8Array()) as ContentsOctets;
-    const id = DERIdentifierOctets.encode(ASN1Type_to_ASN1Tag(asn1.t), 'Constructed');
-    const len = DERLengthOctets.encode(contents.length);
-    return { id, len, contents };
+    return ans(contents);
+  }
+  if (isASN1Value(asn1, 'SEQUENCEOF')) {
+    const contents = asn1.v.reduce<ContentsOctets>((prev, v) => {
+      const component = encodeDER({ t: asn1.t.SEQUENCEOF, v });
+      return CONCAT(prev, serialize(component)) as ContentsOctets;
+    }, new Uint8Array() as ContentsOctets);
+    return ans(contents);
   }
   throw new TypeError('not implemented');
 }
@@ -200,7 +221,24 @@ function decodeDER(der: Uint8Array, t: ASN1Type): { asn1: ASN1Value; entireLen: 
     }
     return { asn1, entireLen };
   }
-  throw new TypeError('not implemented');
+  if (isASN1Type(t, 'SEQUENCEOF')) {
+    const v: unknown[] = [];
+    for (let start = 0; start < contentsLength; ) {
+      console.log(der_contents, start);
+      const { asn1: component, entireLen: tlen } = decodeDER(
+        der_contents.slice(start),
+        t.SEQUENCEOF
+      );
+      v.push(component.v);
+      start += tlen;
+    }
+    const asn1: ASN1Value<typeof t> = { v, t };
+    if (!isASN1Value(asn1, t)) {
+      throw new TypeError('SEQUENCEOF のデコードに失敗');
+    }
+    return { asn1, entireLen };
+  }
+  throw new TypeError(`decodeDER(asn1type: ${JSON.stringify(t)}) has been not implemented`);
 }
 
 const DERIdentifierOctets = {

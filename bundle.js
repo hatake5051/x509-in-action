@@ -127,7 +127,7 @@ const isASN1SimpleType = (arg) => ASN1SimpleTypeList.some((t) => arg === t);
 const isASN1SimpleTypeName = isASN1SimpleType;
 const isASN1StructuredTypeName = (arg) => ['SEQUENCE', 'SEQUENCEOF', 'SETOF'].some((x) => x === arg);
 function isASN1StructuredType(arg) {
-    if (isObject(arg)) {
+    if (isObject(arg) && 'SEQUENCE' in arg) {
         return (Array.isArray(arg.order) &&
             arg.order.every((k) => typeof k === 'string') &&
             isObject(arg.SEQUENCE) &&
@@ -135,10 +135,10 @@ function isASN1StructuredType(arg) {
                 ((isObject(v) && 'OPTIONAL' in v && isASN1Type(v.OPTIONAL)) ||
                     isASN1Type(v))));
     }
-    if (isObject(arg)) {
+    if (isObject(arg) && 'SEQUENCEOF' in arg) {
         return isASN1Type(arg.SEQUENCEOF);
     }
-    if (isObject(arg)) {
+    if (isObject(arg) && 'SETOF' in arg) {
         return isASN1Type(arg.SETOF);
     }
     return false;
@@ -224,39 +224,57 @@ function ASN1Type_to_ASN1Tag(t) {
 const isASN1TagClass = (arg) => ASN1TagClassList.some((x) => x === arg);
 const ASN1TagClassList = ['Universal', 'Application', 'Context Specific', 'Private'];
 
+function ASN1Type_to_DERMethod(t) {
+    if (t === 'ANY')
+        throw new TypeError('ANY  は DER encode できません');
+    if (t === 'BOOLEAN' ||
+        t === 'INTEGER' ||
+        t === 'BIT STRING' ||
+        t === 'OCTET STRING' ||
+        t === 'NULL' ||
+        t === 'OBJECT IDENTIFIER' ||
+        t === 'UTCTime')
+        return 'Primitive';
+    if ('EXPLICIT' in t || 'SEQUENCE' in t || 'SEQUENCEOF' in t || 'SETOF' in t)
+        return 'Constructed';
+    if ('IMPLICIT' in t)
+        return ASN1Type_to_DERMethod(t.t);
+    if ('CHOICE' in t)
+        throw new TypeError(`${JSON.stringify(t)} は DER encode できない`);
+    throw new TypeError(`ASN1Type_to_DERMethod(${JSON.stringify(t)}) has not been implmented`);
+}
 const DER = {
     encode: (asn1) => serialize(encodeDER(asn1)),
     decode: (der, t) => {
         const x = decodeDER(der, t);
+        // 乱暴な型キャスト
         return x.asn1;
     },
 };
 const serialize = (x) => CONCAT(CONCAT(x.id, x.len), x.contents);
 function encodeDER(asn1) {
+    const id = DERIdentifierOctets.encode(ASN1Type_to_ASN1Tag(asn1.t), ASN1Type_to_DERMethod(asn1.t));
+    const ans = (contents) => ({
+        id,
+        len: DERLengthOctets.encode(contents.length),
+        contents,
+    });
     if (isASN1Value(asn1, 'NULL')) {
         const contents = DERContentsOctets_NULL.encode(asn1.v);
-        const id = DERIdentifierOctets.encode(ASN1Type_to_ASN1Tag(asn1.t), 'Primitive');
-        const len = DERLengthOctets.encode(contents.length);
-        return { id, len, contents };
+        return ans(contents);
     }
     if (isASN1Value(asn1, 'INTEGER')) {
         const contents = DERContentsOctets_INTEGER.encode(asn1.v);
-        const id = DERIdentifierOctets.encode(ASN1Type_to_ASN1Tag(asn1.t), 'Primitive');
-        const len = DERLengthOctets.encode(contents.length);
-        return { id, len, contents };
+        return ans(contents);
     }
     if (isASN1Value(asn1, 'IMPLICIT')) {
         const der = encodeDER({ v: asn1.v.v, t: asn1.t.t });
-        const { method } = DERIdentifierOctets.decode(der.id);
-        const id = DERIdentifierOctets.encode(ASN1Type_to_ASN1Tag(asn1.t), method);
         return { id, len: der.len, contents: der.contents };
     }
     if (isASN1Value(asn1, 'EXPLICIT')) {
         const component = encodeDER({ v: asn1.v.v, t: asn1.t.t });
         const contents = serialize(component);
-        const id = DERIdentifierOctets.encode(ASN1Type_to_ASN1Tag(asn1.t), 'Constructed');
-        const len = DERLengthOctets.encode(contents.length);
-        return { id, len, contents };
+        return ans(contents);
     }
     if (isASN1Value(asn1, 'SEQUENCE')) {
         const contents = asn1.t.order.reduce((prev, id) => {
@@ -272,9 +290,14 @@ function encodeDER(asn1) {
             const component = encodeDER({ v: asn1.v[id], t });
             return CONCAT(prev, serialize(component));
         }, new Uint8Array());
-        const id = DERIdentifierOctets.encode(ASN1Type_to_ASN1Tag(asn1.t), 'Constructed');
-        const len = DERLengthOctets.encode(contents.length);
-        return { id, len, contents };
+        return ans(contents);
+    }
+    if (isASN1Value(asn1, 'SEQUENCEOF')) {
+        const contents = asn1.v.reduce((prev, v) => {
+            const component = encodeDER({ t: asn1.t.SEQUENCEOF, v });
+            return CONCAT(prev, serialize(component));
+        }, new Uint8Array());
+        return ans(contents);
     }
     throw new TypeError('not implemented');
 }
@@ -290,7 +313,8 @@ function decodeDER(der, t) {
     const der_contents = der.slice(leni + lenl, entireLen);
     if (isASN1Type(t, 'NULL')) {
         const v = DERContentsOctets_NULL.decode(der_contents);
-        return { asn1: { t, v }, entireLen };
+        const asn1 = { t, v };
+        return { asn1, entireLen };
     }
     if (isASN1Type(t, 'INTEGER')) {
         const v = DERContentsOctets_INTEGER.decode(der_contents);
@@ -332,7 +356,21 @@ function decodeDER(der, t) {
         }
         return { asn1, entireLen };
     }
-    throw new TypeError('not implemented');
+    if (isASN1Type(t, 'SEQUENCEOF')) {
+        const v = [];
+        for (let start = 0; start < contentsLength;) {
+            console.log(der_contents, start);
+            const { asn1: component, entireLen: tlen } = decodeDER(der_contents.slice(start), t.SEQUENCEOF);
+            v.push(component.v);
+            start += tlen;
+        }
+        const asn1 = { v, t };
+        if (!isASN1Value(asn1, t)) {
+            throw new TypeError('SEQUENCEOF のデコードに失敗');
+        }
+        return { asn1, entireLen };
+    }
+    throw new TypeError(`decodeDER(asn1type: ${JSON.stringify(t)}) has been not implemented`);
 }
 const DERIdentifierOctets = {
     encode: (tag, method) => {
@@ -506,8 +544,10 @@ const DERContentsOctets_INTEGER = {
     },
 };
 const DERContentsOctets_NULL = {
-    encode: (v) => new Uint8Array(),
-    decode: (octets) => undefined,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    encode: (_v) => new Uint8Array(),
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    decode: (_octets) => undefined,
 };
 
 const AlgorithmIdentifier = ASN1SEQUENCE({
@@ -575,7 +615,6 @@ function BASE64(OCTETS) {
     const base64_encode = window.btoa(b_str);
     return base64_encode;
 }
-BASE64(new Uint8Array());
 BASE64_DECODE('MIIBtjCCAVugAwIBAgITBmyf1XSXNmY/Owua2eiedgPySjAKBggqhkjOPQQDAjA5MQswCQYDVQQGEwJVUzEPMA0GA1UEChMGQW1hem9uMRkwFwYDVQQDExBBbWF6b24gUm9vdCBDQSAzMB4XDTE1MDUyNjAwMDAwMFoXDTQwMDUyNjAwMDAwMFowOTELMAkGA1UEBhMCVVMxDzANBgNVBAoTBkFtYXpvbjEZMBcGA1UEAxMQQW1hem9uIFJvb3QgQ0EgMzBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABCmXp8ZBf8ANm+gBG1bG8lKlui2yEujSLtf6ycXYqm0fc4E7O5hrOXwzpcVOho6AF2hiRVd9RFgdszflZwjrZt6jQjBAMA8GA1UdEwEB/wQFMAMBAf8wDgYDVR0PAQH/BAQDAgGGMB0GA1UdDgQWBBSrttvXBp43rDCGB5Fwx5zEGbF4wDAKBggqhkjOPQQDAgNJADBGAiEA4IWSoxe3jfkrBqWTrBqYaGFy+uGh0PsceGCmQ5nFuMQCIQCcAu/xlJyzlvnrxir4tiz+OpAUFteMYyRIHN8wfdVoOw==');
 const eq = (x, y) => {
     console.log(x, '===', y, '?', eqASN1Type(x, y));
@@ -635,4 +674,15 @@ const der_sequence = DER.encode(asn1_sequence);
 console.log(der_sequence, BASE64(der_sequence));
 const decoded_sequence = DER.decode(der_sequence, sequence);
 console.log(decoded_sequence);
+console.groupEnd();
+console.group('SEQUENCE OF Check');
+const sequenceof = ASN1SEQUENCEOF('INTEGER');
+const asn1_sequenceof = {
+    t: sequenceof,
+    v: [1n, 2n, 3n, 65535n, 5n, 143266986699090766294700635381230934788665930n],
+};
+const der_sequenceof = DER.encode(asn1_sequenceof);
+console.log(der_sequenceof, BASE64(der_sequenceof));
+const decoded_sequenceof = DER.decode(der_sequenceof, sequenceof);
+console.log(decoded_sequenceof);
 console.groupEnd();
