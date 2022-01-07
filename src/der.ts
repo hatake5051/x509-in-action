@@ -1,11 +1,11 @@
-import { CONCAT } from 'utility';
+import { CONCAT, isObject } from 'utility';
 import {
   ASN1Tag,
   ASN1TagNumber,
   ASN1Type,
   ASN1Type_to_ASN1Tag,
   ASN1Value,
-  equalsASN1Tag,
+  eqASN1Tag,
   isASN1Type,
   isASN1Value,
 } from './asn1';
@@ -75,111 +75,136 @@ export { DER };
  */
 type DERMethod = 'Primitive' | 'Constructed';
 
+type IdentifierOctets = Uint8Array & { _brand: 'IdentifierOctets' };
+type LengthOctets = Uint8Array & { _brand: 'LengthOctets' };
+type ContentsOctets = Uint8Array & { _brand: 'ContentsOctets' };
+
 const DER = {
-  encode: (
-    asn1: ASN1Value
-  ): {
-    identifier: Uint8Array;
-    length: Uint8Array;
-    contents: Uint8Array;
-  } => {
-    if (isASN1Value(asn1, 'NULL')) {
-      const contentsOctets = DERContentsOctets_NULL.encode(asn1.v);
-      const identifierOctets = DERIdentifierOctets.encode(ASN1Type_to_ASN1Tag(asn1.t), 'Primitive');
-      const lengthOctets = DERLengthOctets.encode(contentsOctets.length);
-      return {
-        identifier: identifierOctets,
-        length: lengthOctets,
-        contents: contentsOctets,
-      };
-    }
-    if (isASN1Value(asn1, 'INTEGER')) {
-      const contentsOctets = DERContentsOctets_INTEGER.encode(asn1.v);
-      console.log(contentsOctets, asn1);
-      const identifierOctets = DERIdentifierOctets.encode(ASN1Type_to_ASN1Tag(asn1.t), 'Primitive');
-      const lengthOctets = DERLengthOctets.encode(contentsOctets.length);
-      return {
-        identifier: identifierOctets,
-        length: lengthOctets,
-        contents: contentsOctets,
-      };
-    }
-    if (isASN1Value(asn1, { IMPLICIT: 'unknown', t: 'ANY' })) {
-      const der = DER.encode({ v: asn1.v.v, t: asn1.t.t });
-      const { method } = DERIdentifierOctets.decode(der.identifier);
-      const identifier = DERIdentifierOctets.encode(ASN1Type_to_ASN1Tag(asn1.t), method);
-      return {
-        identifier,
-        length: der.length,
-        contents: der.contents,
-      };
-    }
-    if (isASN1Value(asn1, { EXPLICIT: 'unknown', t: 'ANY' })) {
-      const contents = DER.encode({ v: asn1.v.v, t: asn1.t.t });
-      const contentsOctets = CONCAT(
-        contents.identifier,
-        CONCAT(contents.length, contents.contents)
-      );
-      const identifierOctets = DERIdentifierOctets.encode(
-        ASN1Type_to_ASN1Tag(asn1.t),
-        'Constructed'
-      );
-      const lengthOctets = DERLengthOctets.encode(contentsOctets.length);
-      return {
-        identifier: identifierOctets,
-        length: lengthOctets,
-        contents: contentsOctets,
-      };
-    }
-    if (isASN1Value(asn1, { SEQUENCE: 'unknown' })) {
-      console.log('ABCDE');
-    }
-    throw new TypeError('not implemented');
-  },
+  encode: (asn1: ASN1Value): Uint8Array => serialize(encodeDER(asn1)),
   decode: <T extends ASN1Type>(der: Uint8Array, t: T): ASN1Value<T> => {
-    const { tag, method, last: lasti } = DERIdentifierOctets.decode(der);
-    let start = lasti + 1;
-    const { len, last: lastl } = DERLengthOctets.decode(der.slice(lasti + 1));
-    start += lastl + 1;
-    if (isASN1Type(t, 'NULL')) {
-      if (!equalsASN1Tag(ASN1Type_to_ASN1Tag(t), tag)) {
-        console.log(tag);
-        throw new TypeError(`パースエラー。 ${JSON.stringify(t)} としてバイナリを解析できない`);
-      }
-      const v = DERContentsOctets_NULL.decode(der.slice(start, start + len));
-      return { t, v } as ASN1Value<T>;
-    }
-    if (isASN1Type(t, 'INTEGER')) {
-      if (!equalsASN1Tag(ASN1Type_to_ASN1Tag(t), tag)) {
-        console.log(tag);
-        throw new TypeError(`パースエラー。 ${JSON.stringify(t)} としてバイナリを解析できない`);
-      }
-      const v = DERContentsOctets_INTEGER.decode(der.slice(start, start + len));
-      return { t, v } as ASN1Value<T>;
-    }
-    if (isASN1Type(t, { IMPLICIT: 'unknown', t: 'ANY' })) {
-      const implicitTag = ASN1Type_to_ASN1Tag(t);
-      if (!equalsASN1Tag(implicitTag, tag)) {
-        throw new TypeError(`パースエラー。 ${JSON.stringify(t)} としてバイナリを解析できない`);
-      }
-      const identifierOctets = DERIdentifierOctets.encode(ASN1Type_to_ASN1Tag(t.t), method);
-      const asn1 = DER.decode(CONCAT(identifierOctets, der.slice(lasti + 1)), t.t);
-      return { t, v: { v: asn1.v } } as ASN1Value<T>;
-    }
-    if (isASN1Type(t, { EXPLICIT: 'unknown', t: 'ANY' })) {
-      const explicitTag = ASN1Type_to_ASN1Tag(t);
-      if (!equalsASN1Tag(explicitTag, tag)) {
-        throw new TypeError(`パースエラー。 ${JSON.stringify(t)} としてバイナリを解析できない`);
-      }
-      const asn1 = DER.decode(der.slice(start, start + len), t.t);
-      return { t, v: { v: asn1.v } } as ASN1Value<T>;
-    }
-    throw new TypeError('not implemented');
+    const x = decodeDER(der, t);
+    // 乱暴な型キャスト
+    return x.asn1 as ASN1Value<T>;
   },
 };
 
+const serialize = (x: {
+  id: IdentifierOctets;
+  len: LengthOctets;
+  contents: ContentsOctets;
+}): Uint8Array => CONCAT(CONCAT(x.id, x.len), x.contents);
+
+function encodeDER(asn1: ASN1Value): {
+  id: IdentifierOctets;
+  len: LengthOctets;
+  contents: ContentsOctets;
+} {
+  if (isASN1Value(asn1, 'NULL')) {
+    const contents = DERContentsOctets_NULL.encode(asn1.v);
+    const id = DERIdentifierOctets.encode(ASN1Type_to_ASN1Tag(asn1.t), 'Primitive');
+    const len = DERLengthOctets.encode(contents.length);
+    return { id, len, contents };
+  }
+  if (isASN1Value(asn1, 'INTEGER')) {
+    const contents = DERContentsOctets_INTEGER.encode(asn1.v);
+    const id = DERIdentifierOctets.encode(ASN1Type_to_ASN1Tag(asn1.t), 'Primitive');
+    const len = DERLengthOctets.encode(contents.length);
+    return { id, len, contents };
+  }
+  if (isASN1Value(asn1, 'IMPLICIT')) {
+    const der = encodeDER({ v: asn1.v.v, t: asn1.t.t });
+    const { method } = DERIdentifierOctets.decode(der.id);
+    const id = DERIdentifierOctets.encode(ASN1Type_to_ASN1Tag(asn1.t), method);
+    return { id, len: der.len, contents: der.contents };
+  }
+  if (isASN1Value(asn1, 'EXPLICIT')) {
+    const component = encodeDER({ v: asn1.v.v, t: asn1.t.t });
+    const contents = serialize(component) as ContentsOctets;
+    const id = DERIdentifierOctets.encode(ASN1Type_to_ASN1Tag(asn1.t), 'Constructed');
+    const len = DERLengthOctets.encode(contents.length);
+    return { id, len, contents };
+  }
+  if (isASN1Value(asn1, 'SEQUENCE')) {
+    const contents = asn1.t.order.reduce((prev, id) => {
+      let t = asn1.t.SEQUENCE[id];
+      if (t == null) throw new TypeError(`Unexpected null`);
+      if (isObject(t) && 'OPTIONAL' in t) {
+        if (asn1.v[id] == null) {
+          return prev;
+        }
+        t = t.OPTIONAL;
+      }
+      const component = encodeDER({ v: asn1.v[id], t });
+      return CONCAT(prev, serialize(component));
+    }, new Uint8Array()) as ContentsOctets;
+    const id = DERIdentifierOctets.encode(ASN1Type_to_ASN1Tag(asn1.t), 'Constructed');
+    const len = DERLengthOctets.encode(contents.length);
+    return { id, len, contents };
+  }
+  throw new TypeError('not implemented');
+}
+
+function decodeDER(der: Uint8Array, t: ASN1Type): { asn1: ASN1Value; entireLen: number } {
+  const { tag, method, entireLen: leni } = DERIdentifierOctets.decode(der as IdentifierOctets);
+  if (!eqASN1Tag(ASN1Type_to_ASN1Tag(t), tag)) {
+    console.log(tag);
+    throw new TypeError(`パースエラー。 ${JSON.stringify(t)} としてバイナリを解析できない`);
+  }
+  const der_len = der.slice(leni) as LengthOctets;
+  const { contentsLength, entireLen: lenl } = DERLengthOctets.decode(der_len);
+  const entireLen = leni + lenl + contentsLength;
+  const der_contents = der.slice(leni + lenl, entireLen) as ContentsOctets;
+  if (isASN1Type(t, 'NULL')) {
+    const v = DERContentsOctets_NULL.decode(der_contents);
+    const asn1: ASN1Value<typeof t> = { t, v };
+    return { asn1, entireLen };
+  }
+  if (isASN1Type(t, 'INTEGER')) {
+    const v = DERContentsOctets_INTEGER.decode(der_contents);
+    const asn1: ASN1Value<typeof t> = { t, v };
+    return { asn1, entireLen };
+  }
+  if (isASN1Type(t, 'IMPLICIT')) {
+    const identifierOctets = DERIdentifierOctets.encode(ASN1Type_to_ASN1Tag(t.t), method);
+    const { asn1: component } = decodeDER(CONCAT(identifierOctets, der_len), t.t);
+    const asn1: ASN1Value<typeof t> = { t, v: { v: component.v } };
+    return { asn1, entireLen };
+  }
+  if (isASN1Type(t, 'EXPLICIT')) {
+    const { asn1: component } = decodeDER(der_contents, t.t);
+    const asn1: ASN1Value<typeof t> = { t, v: { v: component.v } };
+    return { asn1, entireLen };
+  }
+  if (isASN1Type(t, 'SEQUENCE')) {
+    let v: Partial<ASN1Value<typeof t>['v']> = {};
+    let start = 0;
+    for (const id of t.order) {
+      let tt = t.SEQUENCE[id];
+      if (tt == null) throw new TypeError(`Unexpected null`);
+      if (isObject(tt) && 'OPTIONAL' in tt) {
+        const { tag: ttag } = DERIdentifierOctets.decode(
+          der_contents.slice(start) as IdentifierOctets
+        );
+        if (!eqASN1Tag(ASN1Type_to_ASN1Tag(tt.OPTIONAL), ttag)) {
+          continue;
+        }
+        tt = tt.OPTIONAL;
+      }
+      const { asn1: component, entireLen: tlen } = decodeDER(der_contents.slice(start), tt);
+      v = { ...v, [id]: component.v };
+      start += tlen;
+    }
+    const asn1: ASN1Value<typeof t> = { v, t };
+    if (!isASN1Value(asn1, t)) {
+      throw new TypeError('SEQUENCE のデコードに失敗');
+    }
+    return { asn1, entireLen };
+  }
+  throw new TypeError('not implemented');
+}
+
 const DERIdentifierOctets = {
-  encode: (tag: ASN1Tag, method: DERMethod): Uint8Array => {
+  encode: (tag: ASN1Tag, method: DERMethod): IdentifierOctets => {
     let bits8_7: number;
     switch (tag.c) {
       case 'Universal':
@@ -199,7 +224,7 @@ const DERIdentifierOctets = {
     if (tag.n < 0x1f) {
       const bits5_1 = tag.n;
       const first_octet = (bits8_7 << 6) + (bit6 << 5) + bits5_1;
-      return new Uint8Array([first_octet]);
+      return new Uint8Array([first_octet]) as IdentifierOctets;
     }
     const first_octet = (bits8_7 << 6) + (bit6 << 5) + 0x1f;
     let num = tag.n as number;
@@ -210,9 +235,9 @@ const DERIdentifierOctets = {
       num = Math.floor(num / radix);
     }
     numlistBasedOnRasix.push(num);
-    return new Uint8Array([first_octet, ...numlistBasedOnRasix.reverse()]);
+    return new Uint8Array([first_octet, ...numlistBasedOnRasix.reverse()]) as IdentifierOctets;
   },
-  decode: (octets: Uint8Array): { tag: ASN1Tag; method: DERMethod; last: number } => {
+  decode: (octets: IdentifierOctets): { tag: ASN1Tag; method: DERMethod; entireLen: number } => {
     if (octets[0] == null) throw new TypeError('正しい DER Identifier Octets を与えてください。');
     let c: ASN1Tag['c'];
     const bits8_7 = (octets[0] & 0xc0) >> 6;
@@ -236,7 +261,7 @@ const DERIdentifierOctets = {
     const method: DERMethod = bit6 === 0 ? 'Primitive' : 'Constructed';
     const bits5_1 = octets[0] & 0x1f;
     if (bits5_1 < 0x1f) {
-      return { tag: { c, n: bits5_1 as ASN1TagNumber }, method, last: 0 };
+      return { tag: { c, n: bits5_1 as ASN1TagNumber }, method, entireLen: 1 };
     }
     let last = 0;
     let num = 0;
@@ -252,14 +277,14 @@ const DERIdentifierOctets = {
         break;
       }
     }
-    return { tag: { c, n: num as ASN1TagNumber }, method, last };
+    return { tag: { c, n: num as ASN1TagNumber }, method, entireLen: last + 1 };
   },
 };
 
 const DERLengthOctets = {
-  encode: (contentsOctetLength: number): Uint8Array => {
+  encode: (contentsOctetLength: number): LengthOctets => {
     if (contentsOctetLength < 128) {
-      return new Uint8Array([contentsOctetLength]);
+      return new Uint8Array([contentsOctetLength]) as LengthOctets;
     }
     let len = contentsOctetLength;
     const lenList = [];
@@ -271,12 +296,12 @@ const DERLengthOctets = {
     lenList.push(len);
     const lenListLength = lenList.length;
     const first_octet = (1 << 7) + lenListLength;
-    return new Uint8Array([first_octet, ...lenList.reverse()]);
+    return new Uint8Array([first_octet, ...lenList.reverse()]) as LengthOctets;
   },
-  decode: (octets: Uint8Array): { len: number; last: number } => {
+  decode: (octets: LengthOctets): { contentsLength: number; entireLen: number } => {
     if (octets[0] == null) throw new TypeError('正しい DER Length Octets を与えてください。');
     if (octets[0] < 128) {
-      return { len: octets[0], last: 0 };
+      return { contentsLength: octets[0], entireLen: 1 };
     }
     const lenOctetsLength = octets[0] & 0x7f;
     let len = 0;
@@ -285,12 +310,12 @@ const DERLengthOctets = {
       if (oct == null) throw new TypeError('DER Length Octets の encoding で long format error');
       len = (len << 8) + oct;
     }
-    return { len, last: lenOctetsLength };
+    return { contentsLength: len, entireLen: lenOctetsLength + 1 };
   },
 };
 
 const DERContentsOctets_INTEGER = {
-  encode: (v: bigint): Uint8Array => {
+  encode: (v: bigint): ContentsOctets => {
     // 整数の値を２の補数表現で表す。
     let str: string;
     if (v < 0n) {
@@ -315,9 +340,9 @@ const DERContentsOctets_INTEGER = {
       const oct = parseInt(str.substring(i * 2, i * 2 + 2), 16);
       octets.push(oct);
     }
-    return new Uint8Array(octets);
+    return new Uint8Array(octets) as ContentsOctets;
   },
-  decode: (octets: Uint8Array): bigint => {
+  decode: (octets: ContentsOctets): bigint => {
     let isNonNegative = true;
     const hexStr = Array.from(octets)
       .map((e, i) => {
@@ -349,10 +374,8 @@ const DERContentsOctets_INTEGER = {
 };
 
 const DERContentsOctets_NULL = {
-  encode: (v: undefined): Uint8Array => {
-    return new Uint8Array();
-  },
-  decode: (octets: Uint8Array): undefined => {
-    return undefined;
-  },
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  encode: (_v: undefined): ContentsOctets => new Uint8Array() as ContentsOctets,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  decode: (_octets: ContentsOctets): undefined => undefined,
 };

@@ -19,9 +19,9 @@ export {
   isASN1Value,
   ASN1Type,
   isASN1Type,
-  equalsASN1Type,
+  eqASN1Type,
   ASN1Tag,
-  equalsASN1Tag,
+  eqASN1Tag,
   ASN1TagNumber,
   ASN1Type_to_ASN1Tag,
   ASN1CHOICE,
@@ -41,7 +41,10 @@ export {
  */
 type ASN1Type = ASN1SimpleType | ASN1StructuredType | ASN1TaggedType | ASN1OtherType;
 
-function isASN1Type<T extends ASN1Type = ASN1Type>(arg: unknown, t?: T): arg is T {
+function isASN1Type<T extends ASN1Type | ASN1TypeName>(
+  arg: unknown,
+  t?: T
+): arg is T extends ASN1TypeName ? ASN1TypeFromName<T> : T extends ASN1Type ? T : never {
   if (t == null) {
     return (
       isASN1SimpleType(arg) ||
@@ -50,49 +53,93 @@ function isASN1Type<T extends ASN1Type = ASN1Type>(arg: unknown, t?: T): arg is 
       isASN1OtherType(arg)
     );
   }
-  return isASN1Type(arg) && equalsASN1Type(arg, t);
+  if (isASN1TypeName(t)) return isASN1Type(arg) && t === asn1TypeNameFromType(arg);
+  return isASN1Type(arg) && eqASN1Type(t, arg);
 }
 
-// type ASN1TypeName = ASN1SimpleType | 'SEQUENCE' | 'IMPLICIT' | 'EXPLICIT' | 'ANY';
-// type ASN1TypeFromName<N extends ASN1TypeName> = N extends ASN1SimpleType
-//   ? N
-//   : N extends 'SEQUENCE'
-//   ? ASN1SEQUENCEType
-//   : N extends 'IMPLICIT'
-//   ? ASN1ImplicitlyTaggedType
-//   : N extends 'EXPLICIT'
-//   ? ASN1ExplicitlyTaggedType
-//   : N extends 'ANY'
-//   ? 'ANY'
-//   : never;
-
-// function isASN1Type<N extends ASN1TypeName = ASN1TypeName>(
-//   arg: unknown,
-//   name?: N
-// ): arg is ASN1TypeFromName<N> {
-//   if (name == null) {
-//     return (
-//       isASN1SimpleType(arg) ||
-//       isASN1StructuredType(arg) ||
-//       isASN1TaggedType(arg) ||
-//       isASN1OtherType(arg)
-//     );
-//   }
-//   if (['NULL', 'INTEGER'].includes(name)) return isASN1SimpleType(arg);
-//   if (['SEQUENCE'].includes(name)) return isASN1StructuredValue(arg);
-
-// }
-
-function equalsASN1Type(l?: ASN1Type, r?: ASN1Type): boolean {
+function eqASN1Type(l?: ASN1Type, r?: ASN1Type): boolean {
   if (l == null && r == null) return true;
   if (l == null || r == null) return false;
   if (l === 'ANY' || r === 'ANY') return true;
-  if (isASN1SimpleType(l)) return isASN1SimpleType(r) && l == r;
-  if (isASN1TaggedType(l)) return isASN1TaggedType(r) && equalsASN1TaggedType(l, r);
-  if (isASN1StructuredType(l)) return isASN1StructuredType(r) && equalsASN1StructuredType(l, r);
-  if (isASN1OtherType(l)) return isASN1OtherType(r) && equalsASN1OtherType(l, r);
+  if (isASN1SimpleType(l)) return isASN1SimpleType(r) && l === r;
+  if ('IMPLICIT' in l) {
+    return (
+      isObject(r) && 'IMPLICIT' in r && eqASN1Tag(l.IMPLICIT, r.IMPLICIT) && eqASN1Type(l.t, r.t)
+    );
+  }
+  if ('EXPLICIT' in l) {
+    return (
+      isObject(r) && 'EXPLICIT' in r && eqASN1Tag(l.EXPLICIT, r.EXPLICIT) && eqASN1Type(l.t, r.t)
+    );
+  }
+  if ('SEQUENCE' in l) {
+    return (
+      isObject(r) &&
+      'SEQUENCE' in r &&
+      new Set(l.order).size === new Set(r.order).size &&
+      l.order.every((li) => {
+        const lv = l.SEQUENCE[li];
+        const rv = l.SEQUENCE[li];
+        return (
+          r.order.includes(li) &&
+          eqASN1Type(
+            isObject(lv) && 'OPTIONAL' in lv ? lv.OPTIONAL : lv,
+            isObject(rv) && 'OPTIONAL' in rv ? rv.OPTIONAL : rv
+          )
+        );
+      })
+    );
+  }
+  if ('SEQUENCEOF' in l) {
+    return isObject(r) && 'SEQUENCEOF' in r && eqASN1Type(l.SEQUENCEOF, r.SEQUENCEOF);
+  }
+  if ('SETOF' in l) {
+    return isObject(r) && 'SETOF' in r && eqASN1Type(l.SETOF, r.SETOF);
+  }
+  if ('CHOICE' in l) {
+    return (
+      isObject(r) &&
+      'CHOICE' in r &&
+      Object.entries(l.CHOICE).every(([li, lt]) => eqASN1Type(lt, r.CHOICE[li])) &&
+      Object.entries(r.CHOICE).every(([ri, rt]) => eqASN1Type(l.CHOICE[ri], rt))
+    );
+  }
   return false;
 }
+
+type ASN1TypeName =
+  | ASN1SimpleTypeName
+  | ASN1StructuredTypeName
+  | ASN1TaggedTypeName
+  | ASN1OtherTypeName;
+
+const isASN1TypeName = (arg: unknown): arg is ASN1TypeName =>
+  isASN1SimpleTypeName(arg) ||
+  isASN1StructuredTypeName(arg) ||
+  isASN1TaggedTypeName(arg) ||
+  isASN1OtherTypeName(arg);
+
+type ASN1TypeFromName<N extends ASN1TypeName> = N extends ASN1SimpleTypeName
+  ? ASN1SimpleTypeFromName<N>
+  : N extends ASN1StructuredTypeName
+  ? ASN1StructuredTypeFromName<N>
+  : N extends ASN1TaggedTypeName
+  ? ASN1TaggedTypeFromName<N>
+  : N extends ASN1OtherTypeName
+  ? ASN1OtherTypeFromName<N>
+  : never;
+
+const asn1TypeNameFromType = <N extends ASN1TypeName>(t: ASN1TypeFromName<N>): N => {
+  if (isASN1SimpleType(t)) return t as N;
+  if ('SEQUENCE' in t) return 'SEQUENCE' as N;
+  if ('SEQUENCEOF' in t) return 'SEQUENCEOF' as N;
+  if ('SETOF' in t) return 'SETOF' as N;
+  if ('IMPLICIT' in t) return 'IMPLICIT' as N;
+  if ('EXPLICIT' in t) return 'EXPLICIT' as N;
+  if (t === 'ANY') return 'ANY' as N;
+  if ('CHOICE' in t) return 'CHOICE' as N;
+  throw new TypeError(`${JSON.stringify(t)} は ASN1 Type ではない`);
+};
 
 /**
  * ASN1Type を、その値を Typescript で持つ場合の型に変換する
@@ -112,21 +159,14 @@ type ASN1Value<T extends ASN1Type = ASN1Type> = {
   v: ASN1Type_to_TSType<T>;
 };
 
-function isASN1Value<T extends ASN1Type>(arg: unknown, t: T): arg is ASN1Value<T> {
-  if (!(isObject<ASN1Value>(arg) && isASN1Type(arg.t) && equalsASN1Type(arg.t, t))) return false;
-  if (isASN1SimpleType(t)) {
-    return isASN1SimpleValue(arg.v, t);
-  }
-  if (isASN1TaggedType(t)) {
-    return isASN1TaggedValue(arg.v, t);
-  }
-  if (isASN1StructuredType(t)) {
-    return isASN1StructuredValue(arg.v, t);
-  }
-  if (isASN1OtherType(t)) {
-    return isASN1OtheValue(arg.v, t);
-  }
-  return false;
+function isASN1Value<T extends ASN1Type | ASN1TypeName>(
+  value: ASN1Value,
+  t: T
+): value is ASN1Value<
+  T extends ASN1TypeName ? ASN1TypeFromName<T> : T extends ASN1Type ? T : never
+> {
+  if (isASN1TypeName(t)) return t === asn1TypeNameFromType(value.t);
+  return eqASN1Type(t, value.t);
 }
 
 /**
@@ -153,6 +193,14 @@ const ASN1SimpleTypeList = [
 const isASN1SimpleType = (arg: unknown): arg is ASN1SimpleType =>
   ASN1SimpleTypeList.some((t) => arg === t);
 
+type ASN1SimpleTypeName = ASN1SimpleType;
+
+type ASN1SimpleTypeFromName<N extends ASN1SimpleTypeName> = N extends ASN1SimpleTypeName
+  ? N
+  : never;
+
+const isASN1SimpleTypeName = isASN1SimpleType;
+
 type ASN1SimpleType_to_TSType<T extends ASN1SimpleType> = T extends 'INTEGER'
   ? bigint
   : T extends 'BIT STRING'
@@ -169,46 +217,35 @@ type ASN1SimpleType_to_TSType<T extends ASN1SimpleType> = T extends 'INTEGER'
   ? Uint8Array
   : never;
 
-function isASN1SimpleValue<T extends ASN1SimpleType>(
-  value: unknown,
-  t: T
-): value is ASN1SimpleType_to_TSType<T> {
-  switch (t) {
-    case 'INTEGER':
-      return typeof value === 'bigint';
-    case 'BIT STRING':
-      return value instanceof Uint8Array;
-    case 'NULL':
-      return value == null;
-    case 'OBJECT IDENTIFIER':
-      return Array.isArray(value) && value.every((x) => typeof x === 'number');
-    case 'UTCTime':
-      return typeof value === 'string';
-    default:
-      return false;
-  }
-}
-
 /**
  * Structured type は構成要素を持つ型で、ASN.1 では４つ定義されている
  * - SEQUENCE: 一つ以上の type の順序付きコレクション
  */
 type ASN1StructuredType = ASN1SEQUENCEType | ASN1SEQUENCEOFType | ASN1SETOFType;
 
+type ASN1StructuredTypeName = 'SEQUENCE' | 'SEQUENCEOF' | 'SETOF';
+const isASN1StructuredTypeName = (arg: unknown): arg is ASN1StructuredTypeName =>
+  ['SEQUENCE', 'SEQUENCEOF', 'SETOF'].some((x) => x === arg);
+
+type ASN1StructuredTypeFromName<N extends ASN1StructuredTypeName> = N extends 'SEQUENCE'
+  ? ASN1SEQUENCEType
+  : N extends 'SEQUENCEOF'
+  ? ASN1SEQUENCEOFType
+  : N extends 'SETOF'
+  ? ASN1SETOFType
+  : never;
+
 function isASN1StructuredType(arg: unknown): arg is ASN1StructuredType {
   if (isObject<ASN1SEQUENCEType>(arg)) {
-    if (arg.order == null) {
-      return arg.SEQUENCE === 'unknown';
-    }
-    // if arg.order has a value
     return (
       Array.isArray(arg.order) &&
       arg.order.every((k) => typeof k === 'string') &&
-      isObject<Exclude<ASN1SEQUENCEType['SEQUENCE'], 'unknown'>>(arg.SEQUENCE) &&
+      isObject<ASN1SEQUENCEType['SEQUENCE']>(arg.SEQUENCE) &&
       Object.entries(arg.SEQUENCE).every(
         ([k, v]) =>
           (arg.order as string[]).includes(k) &&
-          ((isObject<{ OPTIONAL: unknown }>(v) && isASN1Type(v.OPTIONAL)) || isASN1Type(v))
+          ((isObject<{ OPTIONAL: unknown }>(v) && 'OPTIONAL' in v && isASN1Type(v.OPTIONAL)) ||
+            isASN1Type(v))
       )
     );
   }
@@ -221,50 +258,17 @@ function isASN1StructuredType(arg: unknown): arg is ASN1StructuredType {
   return false;
 }
 
-function equalsASN1StructuredType(l?: ASN1StructuredType, r?: ASN1StructuredType): boolean {
-  if (l == null && r == null) return true;
-  if (l == null || r == null) return false;
-  if ('SEQUENCE' in l) {
-    if (l.order == null) {
-      return 'SEQUENCE' in r && l.SEQUENCE === 'unknown';
-    }
-    return (
-      'SEQUENCE' in r &&
-      ((r.order == null && r.SEQUENCE === 'unknown') ||
-        (Array.isArray(l.order) &&
-          Array.isArray(r.order) &&
-          new Set(l.order).size === new Set(r.order).size &&
-          l.order.every((ll) => (r.order as string[]).includes(ll)) &&
-          l.SEQUENCE !== 'unknown' &&
-          r.SEQUENCE !== 'unknown' &&
-          l.order.every((k) => {
-            const lk = (l.SEQUENCE as Exclude<ASN1SEQUENCEType['SEQUENCE'], 'unknown'>)[k];
-            const rk = (r.SEQUENCE as Exclude<ASN1SEQUENCEType['SEQUENCE'], 'unknown'>)[k];
-            return equalsASN1Type(
-              isASN1Type(lk) ? lk : lk?.OPTIONAL,
-              isASN1Type(rk) ? rk : rk?.OPTIONAL
-            );
-          })))
-    );
-  }
-  if ('SEQUENCEOF' in l) {
-    return 'SEQUENCEOF' in r && equalsASN1Type(l.SEQUENCEOF, r.SEQUENCEOF);
-  }
-  if ('SETOF' in l) {
-    return 'SETOF' in r && equalsASN1Type(l.SETOF, r.SETOF);
-  }
-  return false;
-}
-
-type UnknownableASN1StructuredType<T extends ASN1StructuredType> = T extends ASN1SEQUENCEType
-  ? { [P in keyof T]: T[P] extends 'unknown' ? unknown : T[P] }
-  : T;
-
 type FilteredKey<T, U> = { [P in keyof T]: T[P] extends U ? P : never }[keyof T];
 
 type ASN1StructuredType_to_TSType<T extends ASN1StructuredType> = T extends ASN1SEQUENCEType
-  ? T['SEQUENCE'] extends 'unknown'
-    ? unknown
+  ? FilteredKey<T['SEQUENCE'], { OPTIONAL: ASN1Type }> extends never
+    ? FilteredKey<T['SEQUENCE'], ASN1Type> extends never
+      ? { [P in keyof T['SEQUENCE']]: unknown }
+      : {
+          [P in FilteredKey<T['SEQUENCE'], ASN1Type>]: T['SEQUENCE'][P] extends ASN1Type
+            ? ASN1Type_to_TSType<T['SEQUENCE'][P]>
+            : never;
+        }
     : {
         [P in FilteredKey<T['SEQUENCE'], ASN1Type>]: T['SEQUENCE'][P] extends ASN1Type
           ? ASN1Type_to_TSType<T['SEQUENCE'][P]>
@@ -282,37 +286,10 @@ type ASN1StructuredType_to_TSType<T extends ASN1StructuredType> = T extends ASN1
   ? Set<ASN1Type_to_TSType<T['SETOF']>>
   : never;
 
-function isASN1StructuredValue<T extends ASN1StructuredType>(
-  value: unknown,
-  t: T
-): value is ASN1StructuredType_to_TSType<T> {
-  if ('SEQUENCE' in t) {
-    if (!(typeof value === 'object' && value != null)) return false;
-    if (t.SEQUENCE === 'unknown') return true;
-    return Object.entries(value).every(([k, v]) => {
-      const x = (t.SEQUENCE as Exclude<ASN1SEQUENCEType['SEQUENCE'], 'unknown'>)[k];
-      const tt = isASN1Type(x) ? x : x?.OPTIONAL;
-      return tt != null && isASN1Value(v, tt);
-    });
-  }
-  if ('SEQUENCEOF' in t) {
-    return Array.isArray(value) && value.every((v) => isASN1Value(v, t.SEQUENCEOF));
-  }
-  if ('SETOF' in t) {
-    if (!(value instanceof Set)) return false;
-    value.forEach((v) => {
-      if (!isASN1Value(v, t.SETOF)) return false;
-    });
-    return true;
-  }
-  return false;
-}
-
-export type ASN1SEQUENCEType<S extends string = string> = {
-  SEQUENCE: Record<S, ASN1Type | { OPTIONAL: ASN1Type }> | 'unknown';
-  order?: S[];
+type ASN1SEQUENCEType<S extends string = string> = {
+  SEQUENCE: Record<S, ASN1Type | { OPTIONAL: ASN1Type }>;
+  order: S[];
 };
-
 const ASN1SEQUENCE = <S extends string, T extends Record<S, ASN1Type | { OPTIONAL: ASN1Type }>>(
   s: T,
   order: S[]
@@ -338,34 +315,19 @@ const ASN1SETOF = <T extends ASN1Type>(s: T) => ({ SETOF: s });
  */
 type ASN1TaggedType = ASN1ImplicitlyTaggedType | ASN1ExplicitlyTaggedType;
 
-const isASN1TaggedType = (arg: unknown): arg is ASN1TaggedType =>
-  (isObject<ASN1ImplicitlyTaggedType>(arg) &&
-    (arg.IMPLICIT === 'unknown' || isASN1Tag(arg.IMPLICIT)) &&
-    isASN1Type(arg.t)) ||
-  (isObject<ASN1ExplicitlyTaggedType>(arg) &&
-    (arg.EXPLICIT === 'unknown' || isASN1Tag(arg.EXPLICIT)) &&
-    isASN1Type(arg.t));
+type ASN1TaggedTypeName = 'IMPLICIT' | 'EXPLICIT';
+const isASN1TaggedTypeName = (arg: unknown): arg is ASN1TaggedTypeName =>
+  ['IMPLICIT', 'EXPLICIT'].some((x) => x === arg);
 
-function equalsASN1TaggedType(l?: ASN1TaggedType, r?: ASN1TaggedType): boolean {
-  if (l == null && r == null) return true;
-  if (l == null || r == null) return false;
-  if ('IMPLICIT' in l) {
-    return (
-      'IMPLICIT' in r &&
-      (l.IMPLICIT === 'unknown' ||
-        r.IMPLICIT === 'unknown' ||
-        equalsASN1Tag(l.IMPLICIT, r.IMPLICIT)) &&
-      equalsASN1Type(r.t, l.t)
-    );
-  }
-  return (
-    'EXPLICIT' in r &&
-    (l.EXPLICIT === 'unknown' ||
-      r.EXPLICIT === 'unknown' ||
-      equalsASN1Tag(l.EXPLICIT, r.EXPLICIT)) &&
-    equalsASN1Type(l.t, r.t)
-  );
-}
+type ASN1TaggedTypeFromName<N extends ASN1TaggedTypeName> = N extends 'IMPLICIT'
+  ? ASN1ImplicitlyTaggedType
+  : N extends 'EXPLICIT'
+  ? ASN1ExplicitlyTaggedType
+  : never;
+
+const isASN1TaggedType = (arg: unknown): arg is ASN1TaggedType =>
+  (isObject<ASN1ImplicitlyTaggedType>(arg) && isASN1Tag(arg.IMPLICIT) && isASN1Type(arg.t)) ||
+  (isObject<ASN1ExplicitlyTaggedType>(arg) && isASN1Tag(arg.EXPLICIT) && isASN1Type(arg.t));
 
 type ASN1TaggedType_to_TSType<T extends ASN1TaggedType> = T extends ASN1ImplicitlyTaggedType
   ? { v: ASN1Type_to_TSType<T['t']> }
@@ -373,14 +335,6 @@ type ASN1TaggedType_to_TSType<T extends ASN1TaggedType> = T extends ASN1Implicit
   ? { v: ASN1Type_to_TSType<T['t']> }
   : never;
 
-function isASN1TaggedValue<T extends ASN1TaggedType>(
-  value: unknown,
-  t: T
-): value is ASN1TaggedType_to_TSType<T> {
-  return isObject<{ v: unknown }>(value) && isASN1Value({ v: value.v, t: t.t }, t.t);
-}
-
-type ASN1ImplicitlyTaggedType = { IMPLICIT: ASN1Tag | 'unknown'; t: ASN1Type };
 /**
  * Implicitly tagged types は基となる type の tag を変更することで他の types から派生する。
  * ASN.1 キーワードで "[class number] IMPLICIT" として表記される。
@@ -394,8 +348,8 @@ const ASN1ImplicitTag = <T extends ASN1Type>(
   if (isASN1Tag(tag)) return { IMPLICIT: tag, t };
   throw new TypeError('不適切な引数です');
 };
+type ASN1ImplicitlyTaggedType = { IMPLICIT: ASN1Tag; t: ASN1Type };
 
-type ASN1ExplicitlyTaggedType = { EXPLICIT: ASN1Tag | 'unknown'; t: ASN1Type };
 /**
  * Explicitly tagged types は基となる type に an outer tag を付加することで他の types から派生する。
  * 実質的に、 explicitly tagged types は基となる types を要素に持つ structured types である。
@@ -409,8 +363,19 @@ const ASN1ExplicitTag = <T extends ASN1Type>(
   if (isASN1Tag(tag)) return { EXPLICIT: tag, t };
   throw new TypeError('不適切な引数です');
 };
+type ASN1ExplicitlyTaggedType = { EXPLICIT: ASN1Tag; t: ASN1Type };
 
 type ASN1OtherType = ASN1AnyType | ASN1CHOICEType;
+
+type ASN1OtherTypeName = 'ANY' | 'CHOICE';
+const isASN1OtherTypeName = (arg: unknown): arg is ASN1OtherTypeName =>
+  ['ANY', 'CHOICE'].some((x) => x === arg);
+
+type ASN1OtherTypeFromName<N extends ASN1OtherTypeName> = N extends 'ANY'
+  ? ASN1AnyType
+  : N extends 'CHOICE'
+  ? ASN1CHOICEType
+  : never;
 
 const isASN1OtherType = (arg: unknown): arg is ASN1OtherType =>
   arg === 'ANY' ||
@@ -419,28 +384,6 @@ const isASN1OtherType = (arg: unknown): arg is ASN1OtherType =>
     arg.CHOICE != null &&
     Object.values(arg.CHOICE).every((t) => isASN1Type(t)));
 
-function equalsASN1OtherType(l?: ASN1OtherType, r?: ASN1OtherType): boolean {
-  if (l == null && r == null) return true;
-  if (l == null || r == null) return false;
-  if ('ANY' === l) return 'ANY' === r;
-  return (
-    typeof r === 'object' &&
-    'CHOICE' in r &&
-    Object.entries(l.CHOICE).every(([tk, tv]) => {
-      const tl = isASN1Type(tv) ? tv : undefined;
-      const x = r.CHOICE[tk];
-      const tr = isASN1Type(x) ? x : undefined;
-      return equalsASN1Type(tl, tr);
-    }) &&
-    Object.entries(r.CHOICE).every(([tk, tv]) => {
-      const tr = isASN1Type(tv) ? tv : undefined;
-      const x = l.CHOICE[tk];
-      const tl = isASN1Type(x) ? x : undefined;
-      return equalsASN1Type(tl, tr);
-    })
-  );
-}
-
 type ASN1OtherType_to_TSType<T extends ASN1OtherType> = T extends ASN1AnyType
   ? unknown
   : T extends ASN1CHOICEType
@@ -448,19 +391,6 @@ type ASN1OtherType_to_TSType<T extends ASN1OtherType> = T extends ASN1AnyType
     ? { v: ASN1Type_to_TSType<T['CHOICE'][S]> }
     : never
   : never;
-
-function isASN1OtheValue<T extends ASN1OtherType>(
-  value: unknown,
-  t: T
-): value is ASN1OtherType_to_TSType<T> {
-  if (t === 'ANY') {
-    return true;
-  }
-  return (
-    isObject<{ v: unknown }>(value) &&
-    Object.values(t.CHOICE).some((tt) => isASN1Value(value.v, tt))
-  );
-}
 
 type ASN1AnyType = typeof ASN1Any;
 const ASN1Any = 'ANY';
@@ -477,7 +407,7 @@ type ASN1Tag = { c: ASN1TagClass; n: ASN1TagNumber };
 const isASN1Tag = (arg: unknown): arg is ASN1Type =>
   isObject<ASN1Tag>(arg) && isASN1TagClass(arg.c) && isASN1TagNumber(arg.n);
 
-function equalsASN1Tag(l?: ASN1Tag, r?: ASN1Tag): boolean {
+function eqASN1Tag(l?: ASN1Tag, r?: ASN1Tag): boolean {
   if (l == null && r == null) return true;
   if (l == null || r == null) return false;
   return l.c === r.c && l.n === r.n;
@@ -488,16 +418,19 @@ type ASN1TagNumber = number & { _brand: 'ASN1TagNumber' };
 const isASN1TagNumber = (arg: unknown): arg is ASN1TagNumber => typeof arg === 'number' && arg >= 0;
 
 function ASN1Type_to_ASN1Tag(t: ASN1Type): ASN1Tag {
+  if (t === 'ANY') throw new TypeError(`Any の ASN1Tag はない`);
+  if (t === 'BOOLEAN') return { c: 'Universal', n: 1 as ASN1TagNumber };
   if (t === 'INTEGER') return { c: 'Universal', n: 2 as ASN1TagNumber };
   if (t === 'BIT STRING') return { c: 'Universal', n: 3 as ASN1TagNumber };
+  if (t === 'OCTET STRING') return { c: 'Universal', n: 4 as ASN1TagNumber };
   if (t === 'NULL') return { c: 'Universal', n: 5 as ASN1TagNumber };
   if (t === 'OBJECT IDENTIFIER') return { c: 'Universal', n: 6 as ASN1TagNumber };
-  if (isASN1Type(t, { IMPLICIT: 'unknown', t: 'ANY' })) {
-    return t.IMPLICIT as unknown as ASN1Tag;
-  }
-  if (isASN1Type(t, { EXPLICIT: 'unknown', t: 'ANY' })) {
-    return t.EXPLICIT as unknown as ASN1Tag;
-  }
+  if (t === 'UTCTime') return { c: 'Universal', n: 23 as ASN1TagNumber };
+  if ('EXPLICIT' in t) return t.EXPLICIT;
+  if ('IMPLICIT' in t) return t.IMPLICIT;
+  if ('SEQUENCE' in t || 'SEQUENCEOF' in t) return { c: 'Universal', n: 16 as ASN1TagNumber };
+  if ('SETOF' in t) return { c: 'Universal', n: 17 as ASN1TagNumber };
+  if ('CHOICE' in t) throw new TypeError(`${JSON.stringify(t)} の ASN1Tag は選べない`);
   throw new TypeError(`ASN1Type_toASN1Tag(${JSON.stringify(t)}) has not been implmented`);
 }
 

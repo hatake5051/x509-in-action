@@ -1,5 +1,4 @@
 import { DER } from 'der';
-import { CONCAT } from 'utility';
 import {
   ASN1CHOICE,
   ASN1ExplicitTag,
@@ -10,7 +9,7 @@ import {
   ASN1TagNumber,
   ASN1Type,
   ASN1Value,
-  equalsASN1Type,
+  eqASN1Type,
 } from './asn1';
 
 const AlgorithmIdentifier = ASN1SEQUENCE(
@@ -89,7 +88,7 @@ const Certificate = ASN1SEQUENCE(
  * バイナリに文字列を BASE64 デコードする。
  * デコードに失敗すると TypeError を吐く。
  */
-function BASE64_DECODE(STRING: string) {
+function BASE64_DECODE(STRING: string): Uint8Array {
   try {
     const b_str = window.atob(STRING);
     // バイナリ文字列を Uint8Array に変換する
@@ -101,6 +100,15 @@ function BASE64_DECODE(STRING: string) {
   } catch (e: unknown) {
     throw new TypeError(`与えられた文字列 ${STRING} は base64 encoded string ではない`);
   }
+}
+
+function BASE64(OCTETS: Uint8Array): string {
+  // window 組み込みの base64 encode 関数
+  // 組み込みの関数は引数としてバイナリ文字列を要求するため
+  // Uint8Array をバイナリ文字列へと変換する
+  const b_str = String.fromCharCode(...OCTETS);
+  const base64_encode = window.btoa(b_str);
+  return base64_encode;
 }
 
 const DERCert = BASE64_DECODE(
@@ -155,71 +163,52 @@ const ASN1Cert: ASN1Value<typeof Certificate> = {
 };
 
 const eq = (x: ASN1Type, y: ASN1Type) => {
-  console.log(x, '===', y, '?', equalsASN1Type(x, y));
-  console.log(`${JSON.stringify(y)} === ${JSON.stringify(x)} ? ${equalsASN1Type(y, x)}`);
+  console.log(x, '===', y, '?', eqASN1Type(x, y));
+  console.log(`${JSON.stringify(y)} === ${JSON.stringify(x)} ? ${eqASN1Type(y, x)}`);
 };
 
 console.group('NULL check');
+
 eq('NULL', 'ANY');
 const asn1_null: ASN1Value<'NULL'> = { t: 'NULL', v: undefined };
 const der_null = DER.encode(asn1_null);
-console.log(
-  der_null,
-  DER.decode(CONCAT(der_null.identifier, CONCAT(der_null.length, der_null.contents)), 'NULL')
-);
+console.log(der_null, BASE64(der_null));
+const decoded_null = DER.decode(der_null, 'NULL');
+console.log(decoded_null);
 console.groupEnd();
 
 console.group('INTEGER check');
+
 eq('INTEGER', 'ANY');
 const asn1_integer: ASN1Value<'INTEGER'> = { t: 'INTEGER', v: -129n };
 const der_integer = DER.encode(asn1_integer);
-console.log(
-  der_integer,
-  DER.decode(
-    CONCAT(der_integer.identifier, CONCAT(der_integer.length, der_integer.contents)),
-    'INTEGER'
-  )
-);
+console.log(der_integer, BASE64(der_integer));
+const decoded_integer = DER.decode(der_integer, 'INTEGER');
+console.log(decoded_integer);
 console.groupEnd();
 
 console.group('IMPLICIT check');
-const implicitTagged = ASN1ImplicitTag(0 as ASN1TagNumber, 'NULL');
-eq(implicitTagged, { IMPLICIT: 'unknown', t: 'ANY' });
+const implicitTagged = ASN1ImplicitTag(23 as ASN1TagNumber, 'INTEGER');
 const asn1_implicitTagged: ASN1Value<typeof implicitTagged> = {
   t: implicitTagged,
-  v: { v: undefined },
+  v: { v: 65535n },
 };
 const der_implicitTagged = DER.encode(asn1_implicitTagged);
-console.log(
-  der_implicitTagged,
-  DER.decode(
-    CONCAT(
-      der_implicitTagged.identifier,
-      CONCAT(der_implicitTagged.length, der_implicitTagged.contents)
-    ),
-    implicitTagged
-  )
-);
+console.log(der_implicitTagged, BASE64(der_implicitTagged));
+const decoded_implicitTagged = DER.decode(der_implicitTagged, implicitTagged);
+console.log(decoded_implicitTagged);
 console.groupEnd();
 
 console.group('EXPLICIT check');
-const explicitTagged = ASN1ExplicitTag(0 as ASN1TagNumber, implicitTagged);
-eq(explicitTagged, { EXPLICIT: 'unknown', t: 'ANY' });
+const explicitTagged = ASN1ExplicitTag(18 as ASN1TagNumber, 'INTEGER');
 const asn1_explicitTagged: ASN1Value<typeof explicitTagged> = {
   t: explicitTagged,
-  v: { v: { v: undefined } },
+  v: { v: 12345n },
 };
 const der_explicitTagged = DER.encode(asn1_explicitTagged);
-console.log(
-  der_explicitTagged,
-  DER.decode(
-    CONCAT(
-      der_explicitTagged.identifier,
-      CONCAT(der_explicitTagged.length, der_explicitTagged.contents)
-    ),
-    explicitTagged
-  )
-);
+console.log(der_explicitTagged, BASE64(der_explicitTagged));
+const decoded_explicitTagged = DER.decode(der_explicitTagged, explicitTagged);
+console.log(decoded_explicitTagged);
 console.groupEnd();
 
 console.group('SEQUENCE check');
@@ -230,7 +219,6 @@ const sequence = ASN1SEQUENCE(
   },
   ['version', 'serialNumber']
 );
-eq(sequence, { SEQUENCE: 'unknown' });
 const asn1_sequence: ASN1Value<typeof sequence> = {
   t: sequence,
   v: {
@@ -239,5 +227,7 @@ const asn1_sequence: ASN1Value<typeof sequence> = {
   },
 };
 const der_sequence = DER.encode(asn1_sequence);
-console.log(der_sequence);
+console.log(der_sequence, BASE64(der_sequence));
+const decoded_sequence = DER.decode(der_sequence, sequence);
+console.log(decoded_sequence);
 console.groupEnd();
