@@ -162,13 +162,40 @@ function encodeDER(asn1: ASN1Value): {
     }, new Uint8Array() as ContentsOctets);
     return ans(contents);
   }
+  if (isASN1Value(asn1, 'SETOF')) {
+    const cmp = (l: Uint8Array, r: Uint8Array): 'gt' | 'eq' | 'lt' => {
+      for (let i = 0; i < l.length; i++) {
+        const li = l[i];
+        if (li == null) break;
+        const ri = r[i];
+        if (ri == null) return 'gt';
+        if (li > ri) return 'gt';
+        if (li < ri) return 'lt';
+      }
+      return 'eq';
+    };
+
+    const components: Uint8Array[] = [];
+    asn1.v.forEach((v) => {
+      const component = serialize(encodeDER({ t: asn1.t.SETOF, v }));
+      let i = 0;
+      for (; i < components.length; i++) {
+        const ci = components[i];
+        if (ci == null || cmp(component, ci) === 'lt') {
+          break;
+        }
+      }
+      components.splice(i, 0, component);
+    });
+    const contents = components.reduce((prev, c) => CONCAT(prev, c), new Uint8Array());
+    return ans(contents as ContentsOctets);
+  }
   throw new TypeError('not implemented');
 }
 
 function decodeDER(der: Uint8Array, t: ASN1Type): { asn1: ASN1Value; entireLen: number } {
   const { tag, method, entireLen: leni } = DERIdentifierOctets.decode(der as IdentifierOctets);
   if (!eqASN1Tag(ASN1Type_to_ASN1Tag(t), tag)) {
-    console.log(tag);
     throw new TypeError(`パースエラー。 ${JSON.stringify(t)} としてバイナリを解析できない`);
   }
   const der_len = der.slice(leni) as LengthOctets;
@@ -224,7 +251,6 @@ function decodeDER(der: Uint8Array, t: ASN1Type): { asn1: ASN1Value; entireLen: 
   if (isASN1Type(t, 'SEQUENCEOF')) {
     const v: unknown[] = [];
     for (let start = 0; start < contentsLength; ) {
-      console.log(der_contents, start);
       const { asn1: component, entireLen: tlen } = decodeDER(
         der_contents.slice(start),
         t.SEQUENCEOF
@@ -235,6 +261,19 @@ function decodeDER(der: Uint8Array, t: ASN1Type): { asn1: ASN1Value; entireLen: 
     const asn1: ASN1Value<typeof t> = { v, t };
     if (!isASN1Value(asn1, t)) {
       throw new TypeError('SEQUENCEOF のデコードに失敗');
+    }
+    return { asn1, entireLen };
+  }
+  if (isASN1Type(t, 'SETOF')) {
+    const v = new Set();
+    for (let start = 0; start < contentsLength; ) {
+      const { asn1: component, entireLen: tlen } = decodeDER(der_contents.slice(start), t.SETOF);
+      v.add(component.v);
+      start += tlen;
+    }
+    const asn1: ASN1Value<typeof t> = { v, t };
+    if (!isASN1Value(asn1, t)) {
+      throw new TypeError('SETOF のデコードに失敗');
     }
     return { asn1, entireLen };
   }

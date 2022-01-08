@@ -243,3 +243,15 @@ console.log(der_sequenceof, BASE64(der_sequenceof));
 const decoded_sequenceof = DER.decode(der_sequenceof, sequenceof);
 console.log(decoded_sequenceof);
 console.groupEnd();
+
+console.group('SET OF Check');
+const setof = ASN1SETOF('INTEGER');
+const asn1_setof: ASN1Value<typeof setof> = {
+  t: setof,
+  v: new Set([2n, 1n, 3n, 65535n, 5n, 143266986699090766294700635381230934788665930n]),
+};
+const der_setof = DER.encode(asn1_setof);
+console.log(der_setof, BASE64(der_setof));
+const decoded_setof = DER.decode(der_setof, setof);
+console.log(decoded_setof);
+console.groupEnd();

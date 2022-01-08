@@ -299,12 +299,42 @@ function encodeDER(asn1) {
         }, new Uint8Array());
         return ans(contents);
     }
+    if (isASN1Value(asn1, 'SETOF')) {
+        const cmp = (l, r) => {
+            for (let i = 0; i < l.length; i++) {
+                const li = l[i];
+                if (li == null)
+                    break;
+                const ri = r[i];
+                if (ri == null)
+                    return 'gt';
+                if (li > ri)
+                    return 'gt';
+                if (li < ri)
+                    return 'lt';
+            }
+            return 'eq';
+        };
+        const components = [];
+        asn1.v.forEach((v) => {
+            const component = serialize(encodeDER({ t: asn1.t.SETOF, v }));
+            let i = 0;
+            for (; i < components.length; i++) {
+                const ci = components[i];
+                if (ci == null || cmp(component, ci) === 'lt') {
+                    break;
+                }
+            }
+            components.splice(i, 0, component);
+        });
+        const contents = components.reduce((prev, c) => CONCAT(prev, c), new Uint8Array());
+        return ans(contents);
+    }
     throw new TypeError('not implemented');
 }
 function decodeDER(der, t) {
     const { tag, method, entireLen: leni } = DERIdentifierOctets.decode(der);
     if (!eqASN1Tag(ASN1Type_to_ASN1Tag(t), tag)) {
-        console.log(tag);
         throw new TypeError(`パースエラー。 ${JSON.stringify(t)} としてバイナリを解析できない`);
     }
     const der_len = der.slice(leni);
@@ -359,7 +389,6 @@ function decodeDER(der, t) {
     if (isASN1Type(t, 'SEQUENCEOF')) {
         const v = [];
         for (let start = 0; start < contentsLength;) {
-            console.log(der_contents, start);
             const { asn1: component, entireLen: tlen } = decodeDER(der_contents.slice(start), t.SEQUENCEOF);
             v.push(component.v);
             start += tlen;
@@ -367,6 +396,19 @@ function decodeDER(der, t) {
         const asn1 = { v, t };
         if (!isASN1Value(asn1, t)) {
             throw new TypeError('SEQUENCEOF のデコードに失敗');
+        }
+        return { asn1, entireLen };
+    }
+    if (isASN1Type(t, 'SETOF')) {
+        const v = new Set();
+        for (let start = 0; start < contentsLength;) {
+            const { asn1: component, entireLen: tlen } = decodeDER(der_contents.slice(start), t.SETOF);
+            v.add(component.v);
+            start += tlen;
+        }
+        const asn1 = { v, t };
+        if (!isASN1Value(asn1, t)) {
+            throw new TypeError('SETOF のデコードに失敗');
         }
         return { asn1, entireLen };
     }
@@ -685,4 +727,15 @@ const der_sequenceof = DER.encode(asn1_sequenceof);
 console.log(der_sequenceof, BASE64(der_sequenceof));
 const decoded_sequenceof = DER.decode(der_sequenceof, sequenceof);
 console.log(decoded_sequenceof);
+console.groupEnd();
+console.group('SET OF Check');
+const setof = ASN1SETOF('INTEGER');
+const asn1_setof = {
+    t: setof,
+    v: new Set([2n, 1n, 3n, 65535n, 5n, 143266986699090766294700635381230934788665930n]),
+};
+const der_setof = DER.encode(asn1_setof);
+console.log(der_setof, BASE64(der_setof));
+const decoded_setof = DER.decode(der_setof, setof);
+console.log(decoded_setof);
 console.groupEnd();
