@@ -109,7 +109,20 @@ const asn1TypeNameFromType = (t) => {
         return 'CHOICE';
     throw new TypeError(`${JSON.stringify(t)} は ASN1 Type ではない`);
 };
-function isASN1Value(value, t) {
+function isASN1Value(arg) {
+    if (!isObject(arg))
+        return false;
+    if (isASN1SimpleType(arg.t))
+        return isASN1SimpleType_to_TSType(arg.v, arg.t);
+    if (isASN1StructuredType(arg.t))
+        return isASN1StructuredType_to_TSType(arg.v, arg.t);
+    if (isASN1TaggedType(arg.t))
+        return isASN1TaggedType_to_TSType(arg.v, arg.t);
+    if (isASN1OtherType(arg.t))
+        return isASN1OtherType_to_TSType(arg.v, arg.t);
+    return false;
+}
+function checkASN1Value(value, t) {
     if (isASN1TypeName(t))
         return t === asn1TypeNameFromType(value.t);
     return eqASN1Type(t, value.t);
@@ -125,6 +138,26 @@ const ASN1SimpleTypeList = [
 ];
 const isASN1SimpleType = (arg) => ASN1SimpleTypeList.some((t) => arg === t);
 const isASN1SimpleTypeName = isASN1SimpleType;
+function isASN1SimpleType_to_TSType(arg, t) {
+    switch (t) {
+        case 'INTEGER':
+            return typeof arg === 'bigint';
+        case 'BIT STRING':
+            return arg instanceof Uint8Array;
+        case 'NULL':
+            return arg == null;
+        case 'OBJECT IDENTIFIER':
+            return Array.isArray(arg) && arg.every((x) => typeof x === 'number');
+        case 'UTCTime':
+            return typeof arg === 'string';
+        case 'BOOLEAN':
+            return typeof arg === 'boolean';
+        case 'OCTET STRING':
+            return arg instanceof Uint8Array;
+        default:
+            return false;
+    }
+}
 const isASN1StructuredTypeName = (arg) => ['SEQUENCE', 'SEQUENCEOF', 'SETOF'].some((x) => x === arg);
 function isASN1StructuredType(arg) {
     if (isObject(arg) && 'SEQUENCE' in arg) {
@@ -143,6 +176,19 @@ function isASN1StructuredType(arg) {
     }
     return false;
 }
+function isASN1StructuredType_to_TSType(arg, t) {
+    if ('SEQUENCE' in t) {
+        return (isObject(arg) &&
+            Object.entries(arg).every(([k, v]) => t.order.some((x) => x === k) && isASN1Value({ v, t: t.SEQUENCE[k] })));
+    }
+    if ('SEQUENCEOF' in t) {
+        return Array.isArray(arg) && arg.every((v) => isASN1Value({ v, t: t.SEQUENCEOF }));
+    }
+    if ('SETOF' in t) {
+        return arg instanceof Set && [...arg].every((v) => isASN1Value({ v, t: t.SETOF }));
+    }
+    return false;
+}
 const ASN1SEQUENCE = (s, order) => ({
     SEQUENCE: s,
     order,
@@ -152,6 +198,9 @@ const ASN1SETOF = (s) => ({ SETOF: s });
 const isASN1TaggedTypeName = (arg) => ['IMPLICIT', 'EXPLICIT'].some((x) => x === arg);
 const isASN1TaggedType = (arg) => (isObject(arg) && isASN1Tag(arg.IMPLICIT) && isASN1Type(arg.t)) ||
     (isObject(arg) && isASN1Tag(arg.EXPLICIT) && isASN1Type(arg.t));
+function isASN1TaggedType_to_TSType(arg, t) {
+    return isObject(arg) && isASN1Value({ v: arg.v, t: t.t });
+}
 /**
  * Implicitly tagged types は基となる type の tag を変更することで他の types から派生する。
  * ASN.1 キーワードで "[class number] IMPLICIT" として表記される。
@@ -182,6 +231,12 @@ const isASN1OtherType = (arg) => arg === 'ANY' ||
         typeof arg.CHOICE === 'object' &&
         arg.CHOICE != null &&
         Object.values(arg.CHOICE).every((t) => isASN1Type(t)));
+function isASN1OtherType_to_TSType(arg, t) {
+    if (t === 'ANY')
+        return true;
+    return (isObject(arg) &&
+        Object.values(t.CHOICE).some((t) => isASN1Value({ v: arg.v, t })));
+}
 const ASN1CHOICE = (s) => ({ CHOICE: s });
 const isASN1Tag = (arg) => isObject(arg) && isASN1TagClass(arg.c) && isASN1TagNumber(arg.n);
 function eqASN1Tag(l, r) {
@@ -253,30 +308,40 @@ const DER = {
 };
 const serialize = (x) => CONCAT(CONCAT(x.id, x.len), x.contents);
 function encodeDER(asn1) {
+    if (checkASN1Value(asn1, 'CHOICE')) {
+        for (const t of Object.values(asn1.t.CHOICE)) {
+            const inner = { v: asn1.v.v, t };
+            if (!isASN1Value(inner)) {
+                continue;
+            }
+            return encodeDER(inner);
+        }
+        throw new TypeError(`asn1 value が CHOICE を満たせていない`);
+    }
     const id = DERIdentifierOctets.encode(ASN1Type_to_ASN1Tag(asn1.t), ASN1Type_to_DERMethod(asn1.t));
     const ans = (contents) => ({
         id,
         len: DERLengthOctets.encode(contents.length),
         contents,
     });
-    if (isASN1Value(asn1, 'NULL')) {
+    if (checkASN1Value(asn1, 'NULL')) {
         const contents = DERContentsOctets_NULL.encode(asn1.v);
         return ans(contents);
     }
-    if (isASN1Value(asn1, 'INTEGER')) {
+    if (checkASN1Value(asn1, 'INTEGER')) {
         const contents = DERContentsOctets_INTEGER.encode(asn1.v);
         return ans(contents);
     }
-    if (isASN1Value(asn1, 'IMPLICIT')) {
+    if (checkASN1Value(asn1, 'IMPLICIT')) {
         const der = encodeDER({ v: asn1.v.v, t: asn1.t.t });
         return { id, len: der.len, contents: der.contents };
     }
-    if (isASN1Value(asn1, 'EXPLICIT')) {
+    if (checkASN1Value(asn1, 'EXPLICIT')) {
         const component = encodeDER({ v: asn1.v.v, t: asn1.t.t });
         const contents = serialize(component);
         return ans(contents);
     }
-    if (isASN1Value(asn1, 'SEQUENCE')) {
+    if (checkASN1Value(asn1, 'SEQUENCE')) {
         const contents = asn1.t.order.reduce((prev, id) => {
             let t = asn1.t.SEQUENCE[id];
             if (t == null)
@@ -292,14 +357,14 @@ function encodeDER(asn1) {
         }, new Uint8Array());
         return ans(contents);
     }
-    if (isASN1Value(asn1, 'SEQUENCEOF')) {
+    if (checkASN1Value(asn1, 'SEQUENCEOF')) {
         const contents = asn1.v.reduce((prev, v) => {
             const component = encodeDER({ t: asn1.t.SEQUENCEOF, v });
             return CONCAT(prev, serialize(component));
         }, new Uint8Array());
         return ans(contents);
     }
-    if (isASN1Value(asn1, 'SETOF')) {
+    if (checkASN1Value(asn1, 'SETOF')) {
         const cmp = (l, r) => {
             for (let i = 0; i < l.length; i++) {
                 const li = l[i];
@@ -333,6 +398,17 @@ function encodeDER(asn1) {
     throw new TypeError('not implemented');
 }
 function decodeDER(der, t) {
+    if (isASN1Type(t, 'CHOICE')) {
+        for (const inner of Object.values(t.CHOICE)) {
+            try {
+                return decodeDER(der, inner);
+            }
+            catch (e) {
+                continue;
+            }
+        }
+        throw new TypeError(`パースエラー。 CHOICE のいずれの型を用いても解析できない`);
+    }
     const { tag, method, entireLen: leni } = DERIdentifierOctets.decode(der);
     if (!eqASN1Tag(ASN1Type_to_ASN1Tag(t), tag)) {
         throw new TypeError(`パースエラー。 ${JSON.stringify(t)} としてバイナリを解析できない`);
@@ -381,7 +457,7 @@ function decodeDER(der, t) {
             start += tlen;
         }
         const asn1 = { v, t };
-        if (!isASN1Value(asn1, t)) {
+        if (!isASN1Value(asn1)) {
             throw new TypeError('SEQUENCE のデコードに失敗');
         }
         return { asn1, entireLen };
@@ -394,7 +470,7 @@ function decodeDER(der, t) {
             start += tlen;
         }
         const asn1 = { v, t };
-        if (!isASN1Value(asn1, t)) {
+        if (!isASN1Value(asn1)) {
             throw new TypeError('SEQUENCEOF のデコードに失敗');
         }
         return { asn1, entireLen };
@@ -407,7 +483,7 @@ function decodeDER(der, t) {
             start += tlen;
         }
         const asn1 = { v, t };
-        if (!isASN1Value(asn1, t)) {
+        if (!isASN1Value(asn1)) {
             throw new TypeError('SETOF のデコードに失敗');
         }
         return { asn1, entireLen };
@@ -738,4 +814,15 @@ const der_setof = DER.encode(asn1_setof);
 console.log(der_setof, BASE64(der_setof));
 const decoded_setof = DER.decode(der_setof, setof);
 console.log(decoded_setof);
+console.groupEnd();
+console.group('CHOICE Check');
+const choice = ASN1CHOICE({ a: 'INTEGER', b: ASN1ExplicitTag(7, 'NULL') });
+const asn1_choice = {
+    t: choice,
+    v: { v: { v: undefined } },
+};
+const der_choice = DER.encode(asn1_choice);
+console.log(der_choice, BASE64(der_choice));
+const decoded_choice = DER.decode(der_choice, choice);
+console.log(decoded_choice);
 console.groupEnd();

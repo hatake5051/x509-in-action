@@ -255,3 +255,15 @@ console.log(der_setof, BASE64(der_setof));
 const decoded_setof = DER.decode(der_setof, setof);
 console.log(decoded_setof);
 console.groupEnd();
+
+console.group('CHOICE Check');
+const choice = ASN1CHOICE({ a: 'INTEGER', b: ASN1ExplicitTag(7 as ASN1TagNumber, 'NULL') });
+const asn1_choice: ASN1Value<typeof choice> = {
+  t: choice,
+  v: { v: { v: undefined } },
+};
+const der_choice = DER.encode(asn1_choice);
+console.log(der_choice, BASE64(der_choice));
+const decoded_choice = DER.decode(der_choice, choice);
+console.log(decoded_choice);
+console.groupEnd();

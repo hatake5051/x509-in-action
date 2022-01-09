@@ -5,6 +5,7 @@ import {
   ASN1Type,
   ASN1Type_to_ASN1Tag,
   ASN1Value,
+  checkASN1Value,
   eqASN1Tag,
   isASN1Type,
   isASN1Value,
@@ -117,30 +118,40 @@ function encodeDER(asn1: ASN1Value): {
   len: LengthOctets;
   contents: ContentsOctets;
 } {
+  if (checkASN1Value(asn1, 'CHOICE')) {
+    for (const t of Object.values(asn1.t.CHOICE)) {
+      const inner = { v: asn1.v.v, t };
+      if (!isASN1Value(inner)) {
+        continue;
+      }
+      return encodeDER(inner);
+    }
+    throw new TypeError(`asn1 value が CHOICE を満たせていない`);
+  }
   const id = DERIdentifierOctets.encode(ASN1Type_to_ASN1Tag(asn1.t), ASN1Type_to_DERMethod(asn1.t));
   const ans = (contents: ContentsOctets) => ({
     id,
     len: DERLengthOctets.encode(contents.length),
     contents,
   });
-  if (isASN1Value(asn1, 'NULL')) {
+  if (checkASN1Value(asn1, 'NULL')) {
     const contents = DERContentsOctets_NULL.encode(asn1.v);
     return ans(contents);
   }
-  if (isASN1Value(asn1, 'INTEGER')) {
+  if (checkASN1Value(asn1, 'INTEGER')) {
     const contents = DERContentsOctets_INTEGER.encode(asn1.v);
     return ans(contents);
   }
-  if (isASN1Value(asn1, 'IMPLICIT')) {
+  if (checkASN1Value(asn1, 'IMPLICIT')) {
     const der = encodeDER({ v: asn1.v.v, t: asn1.t.t });
     return { id, len: der.len, contents: der.contents };
   }
-  if (isASN1Value(asn1, 'EXPLICIT')) {
+  if (checkASN1Value(asn1, 'EXPLICIT')) {
     const component = encodeDER({ v: asn1.v.v, t: asn1.t.t });
     const contents = serialize(component) as ContentsOctets;
     return ans(contents);
   }
-  if (isASN1Value(asn1, 'SEQUENCE')) {
+  if (checkASN1Value(asn1, 'SEQUENCE')) {
     const contents = asn1.t.order.reduce((prev, id) => {
       let t = asn1.t.SEQUENCE[id];
       if (t == null) throw new TypeError(`Unexpected null`);
@@ -155,14 +166,14 @@ function encodeDER(asn1: ASN1Value): {
     }, new Uint8Array()) as ContentsOctets;
     return ans(contents);
   }
-  if (isASN1Value(asn1, 'SEQUENCEOF')) {
+  if (checkASN1Value(asn1, 'SEQUENCEOF')) {
     const contents = asn1.v.reduce<ContentsOctets>((prev, v) => {
       const component = encodeDER({ t: asn1.t.SEQUENCEOF, v });
       return CONCAT(prev, serialize(component)) as ContentsOctets;
     }, new Uint8Array() as ContentsOctets);
     return ans(contents);
   }
-  if (isASN1Value(asn1, 'SETOF')) {
+  if (checkASN1Value(asn1, 'SETOF')) {
     const cmp = (l: Uint8Array, r: Uint8Array): 'gt' | 'eq' | 'lt' => {
       for (let i = 0; i < l.length; i++) {
         const li = l[i];
@@ -194,6 +205,16 @@ function encodeDER(asn1: ASN1Value): {
 }
 
 function decodeDER(der: Uint8Array, t: ASN1Type): { asn1: ASN1Value; entireLen: number } {
+  if (isASN1Type(t, 'CHOICE')) {
+    for (const inner of Object.values(t.CHOICE)) {
+      try {
+        return decodeDER(der, inner);
+      } catch (e) {
+        continue;
+      }
+    }
+    throw new TypeError(`パースエラー。 CHOICE のいずれの型を用いても解析できない`);
+  }
   const { tag, method, entireLen: leni } = DERIdentifierOctets.decode(der as IdentifierOctets);
   if (!eqASN1Tag(ASN1Type_to_ASN1Tag(t), tag)) {
     throw new TypeError(`パースエラー。 ${JSON.stringify(t)} としてバイナリを解析できない`);
@@ -243,7 +264,7 @@ function decodeDER(der: Uint8Array, t: ASN1Type): { asn1: ASN1Value; entireLen: 
       start += tlen;
     }
     const asn1: ASN1Value<typeof t> = { v, t };
-    if (!isASN1Value(asn1, t)) {
+    if (!isASN1Value(asn1)) {
       throw new TypeError('SEQUENCE のデコードに失敗');
     }
     return { asn1, entireLen };
@@ -259,7 +280,7 @@ function decodeDER(der: Uint8Array, t: ASN1Type): { asn1: ASN1Value; entireLen: 
       start += tlen;
     }
     const asn1: ASN1Value<typeof t> = { v, t };
-    if (!isASN1Value(asn1, t)) {
+    if (!isASN1Value(asn1)) {
       throw new TypeError('SEQUENCEOF のデコードに失敗');
     }
     return { asn1, entireLen };
@@ -272,7 +293,7 @@ function decodeDER(der: Uint8Array, t: ASN1Type): { asn1: ASN1Value; entireLen: 
       start += tlen;
     }
     const asn1: ASN1Value<typeof t> = { v, t };
-    if (!isASN1Value(asn1, t)) {
+    if (!isASN1Value(asn1)) {
       throw new TypeError('SETOF のデコードに失敗');
     }
     return { asn1, entireLen };

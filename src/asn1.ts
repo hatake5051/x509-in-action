@@ -17,6 +17,7 @@ import { isObject } from 'utility';
 export {
   ASN1Value,
   isASN1Value,
+  checkASN1Value,
   ASN1Type,
   isASN1Type,
   eqASN1Type,
@@ -159,9 +160,18 @@ type ASN1Value<T extends ASN1Type = ASN1Type> = {
   v: ASN1Type_to_TSType<T>;
 };
 
-function isASN1Value<T extends ASN1Type | ASN1TypeName>(
+function isASN1Value(arg: unknown): arg is ASN1Value {
+  if (!isObject<ASN1Value>(arg)) return false;
+  if (isASN1SimpleType(arg.t)) return isASN1SimpleType_to_TSType(arg.v, arg.t);
+  if (isASN1StructuredType(arg.t)) return isASN1StructuredType_to_TSType(arg.v, arg.t);
+  if (isASN1TaggedType(arg.t)) return isASN1TaggedType_to_TSType(arg.v, arg.t);
+  if (isASN1OtherType(arg.t)) return isASN1OtherType_to_TSType(arg.v, arg.t);
+  return false;
+}
+
+function checkASN1Value<T extends ASN1Type | ASN1TypeName>(
   value: ASN1Value,
-  t: T
+  t?: T
 ): value is ASN1Value<
   T extends ASN1TypeName ? ASN1TypeFromName<T> : T extends ASN1Type ? T : never
 > {
@@ -216,6 +226,30 @@ type ASN1SimpleType_to_TSType<T extends ASN1SimpleType> = T extends 'INTEGER'
   : T extends 'OCTET STRING'
   ? Uint8Array
   : never;
+
+function isASN1SimpleType_to_TSType<T extends ASN1SimpleType>(
+  arg: unknown,
+  t: T
+): arg is ASN1SimpleType_to_TSType<T> {
+  switch (t) {
+    case 'INTEGER':
+      return typeof arg === 'bigint';
+    case 'BIT STRING':
+      return arg instanceof Uint8Array;
+    case 'NULL':
+      return arg == null;
+    case 'OBJECT IDENTIFIER':
+      return Array.isArray(arg) && arg.every((x) => typeof x === 'number');
+    case 'UTCTime':
+      return typeof arg === 'string';
+    case 'BOOLEAN':
+      return typeof arg === 'boolean';
+    case 'OCTET STRING':
+      return arg instanceof Uint8Array;
+    default:
+      return false;
+  }
+}
 
 /**
  * Structured type は構成要素を持つ型で、ASN.1 では４つ定義されている
@@ -286,6 +320,27 @@ type ASN1StructuredType_to_TSType<T extends ASN1StructuredType> = T extends ASN1
   ? Set<ASN1Type_to_TSType<T['SETOF']>>
   : never;
 
+function isASN1StructuredType_to_TSType<T extends ASN1StructuredType>(
+  arg: unknown,
+  t: T
+): arg is ASN1StructuredType_to_TSType<T> {
+  if ('SEQUENCE' in t) {
+    return (
+      isObject(arg) &&
+      Object.entries(arg).every(
+        ([k, v]) => t.order.some((x) => x === k) && isASN1Value({ v, t: t.SEQUENCE[k] })
+      )
+    );
+  }
+  if ('SEQUENCEOF' in t) {
+    return Array.isArray(arg) && arg.every((v) => isASN1Value({ v, t: t.SEQUENCEOF }));
+  }
+  if ('SETOF' in t) {
+    return arg instanceof Set && [...arg].every((v) => isASN1Value({ v, t: t.SETOF }));
+  }
+  return false;
+}
+
 type ASN1SEQUENCEType<S extends string = string> = {
   SEQUENCE: Record<S, ASN1Type | { OPTIONAL: ASN1Type }>;
   order: S[];
@@ -334,6 +389,13 @@ type ASN1TaggedType_to_TSType<T extends ASN1TaggedType> = T extends ASN1Implicit
   : T extends ASN1ExplicitlyTaggedType
   ? { v: ASN1Type_to_TSType<T['t']> }
   : never;
+
+function isASN1TaggedType_to_TSType<T extends ASN1TaggedType>(
+  arg: unknown,
+  t: T
+): arg is ASN1TaggedType_to_TSType<T> {
+  return isObject<ASN1TaggedType_to_TSType<T>>(arg) && isASN1Value({ v: arg.v, t: t.t });
+}
 
 /**
  * Implicitly tagged types は基となる type の tag を変更することで他の types から派生する。
@@ -391,6 +453,17 @@ type ASN1OtherType_to_TSType<T extends ASN1OtherType> = T extends ASN1AnyType
     ? { v: ASN1Type_to_TSType<T['CHOICE'][S]> }
     : never
   : never;
+
+function isASN1OtherType_to_TSType<T extends ASN1OtherType>(
+  arg: unknown,
+  t: T
+): arg is ASN1OtherType_to_TSType<T> {
+  if (t === 'ANY') return true;
+  return (
+    isObject<{ v: unknown }>(arg) &&
+    Object.values(t.CHOICE).some((t) => isASN1Value({ v: arg.v, t }))
+  );
+}
 
 type ASN1AnyType = typeof ASN1Any;
 const ASN1Any = 'ANY';
