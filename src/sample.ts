@@ -168,7 +168,6 @@ const eq = (x: ASN1Type, y: ASN1Type) => {
 };
 
 console.group('NULL check');
-
 eq('NULL', 'ANY');
 const asn1_null: ASN1Value<'NULL'> = { t: 'NULL', v: undefined };
 const der_null = DER.encode(asn1_null);
@@ -177,14 +176,61 @@ const decoded_null = DER.decode(der_null, 'NULL');
 console.log(decoded_null);
 console.groupEnd();
 
-console.group('INTEGER check');
+console.group('BOOLEAN check');
+eq('BOOLEAN', 'ANY');
+const asn1_boolean: ASN1Value<'BOOLEAN'> = { t: 'BOOLEAN', v: true };
+const der_boolean = DER.encode(asn1_boolean);
+console.log(der_boolean, BASE64(der_boolean));
+const decoded_boolean = DER.decode(der_boolean, 'BOOLEAN');
+console.log(decoded_boolean);
+console.groupEnd();
 
+console.group('INTEGER check');
 eq('INTEGER', 'ANY');
 const asn1_integer: ASN1Value<'INTEGER'> = { t: 'INTEGER', v: -129n };
 const der_integer = DER.encode(asn1_integer);
 console.log(der_integer, BASE64(der_integer));
 const decoded_integer = DER.decode(der_integer, 'INTEGER');
 console.log(decoded_integer);
+console.groupEnd();
+
+console.group('BIT STRING check');
+eq('BIT STRING', 'ANY');
+const asn1_bitstring: ASN1Value<'BIT STRING'> = {
+  t: 'BIT STRING',
+  v: new Uint8Array([
+    4, 41, 151, 167, 198, 65, 127, 192, 13, 155, 232, 1, 27, 86, 198, 242, 82, 165, 186, 45, 178,
+    18, 232, 210, 46, 215, 250, 201, 197, 216, 170, 109, 31, 115, 129, 59, 59, 152, 107, 57, 124,
+    51, 165, 197, 78, 134, 142, 128, 23, 104, 98, 69, 87, 125, 68, 88, 29, 179, 55, 229, 103, 8,
+    235, 102, 222,
+  ]),
+};
+const der_bitstring = DER.encode(asn1_bitstring);
+console.log(der_bitstring, BASE64(der_bitstring));
+const decoded_bitstring = DER.decode(der_bitstring, 'BIT STRING');
+console.log(decoded_bitstring);
+console.groupEnd();
+
+console.group('OCTET STRING check');
+const asn1_octetstring: ASN1Value<'OCTET STRING'> = {
+  t: 'OCTET STRING',
+  v: new Uint8Array([48, 3, 1, 1, 255]),
+};
+const der_octetstring = DER.encode(asn1_octetstring);
+console.log(der_octetstring, BASE64(der_octetstring));
+const decoded_octetstring = DER.decode(der_octetstring, 'OCTET STRING');
+console.log(decoded_octetstring);
+console.groupEnd();
+
+console.group('OBJECT IDENTIFIER check');
+const asn1_oid: ASN1Value<'OBJECT IDENTIFIER'> = {
+  t: 'OBJECT IDENTIFIER',
+  v: [1, 2, 840, 10045, 4, 3, 2],
+};
+const der_oid = DER.encode(asn1_oid);
+console.log(der_oid, BASE64(der_oid));
+const decoded_oid = DER.decode(der_oid, 'OBJECT IDENTIFIER');
+console.log(decoded_oid);
 console.groupEnd();
 
 console.group('IMPLICIT check');

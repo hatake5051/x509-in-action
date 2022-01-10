@@ -134,12 +134,28 @@ function encodeDER(asn1: ASN1Value): {
     len: DERLengthOctets.encode(contents.length),
     contents,
   });
-  if (checkASN1Value(asn1, 'NULL')) {
-    const contents = DERContentsOctets_NULL.encode(asn1.v);
+  if (checkASN1Value(asn1, 'BOOLEAN')) {
+    const contents = DERContentsOctets_BOOLEAN.encode(asn1.v);
     return ans(contents);
   }
   if (checkASN1Value(asn1, 'INTEGER')) {
     const contents = DERContentsOctets_INTEGER.encode(asn1.v);
+    return ans(contents);
+  }
+  if (checkASN1Value(asn1, 'BIT STRING')) {
+    const contents = DERContentsOctets_BIT_STRING.encode(asn1.v);
+    return ans(contents);
+  }
+  if (checkASN1Value(asn1, 'OCTET STRING')) {
+    const contents = DERContentsOctets_OCTET_STRING.encode(asn1.v);
+    return ans(contents);
+  }
+  if (checkASN1Value(asn1, 'NULL')) {
+    const contents = DERContentsOctets_NULL.encode(asn1.v);
+    return ans(contents);
+  }
+  if (checkASN1Value(asn1, 'OBJECT IDENTIFIER')) {
+    const contents = DERContentsOctets_OBJECT_IDENTIFIER.encode(asn1.v);
     return ans(contents);
   }
   if (checkASN1Value(asn1, 'IMPLICIT')) {
@@ -223,13 +239,34 @@ function decodeDER(der: Uint8Array, t: ASN1Type): { asn1: ASN1Value; entireLen: 
   const { contentsLength, entireLen: lenl } = DERLengthOctets.decode(der_len);
   const entireLen = leni + lenl + contentsLength;
   const der_contents = der.slice(leni + lenl, entireLen) as ContentsOctets;
-  if (isASN1Type(t, 'NULL')) {
-    const v = DERContentsOctets_NULL.decode(der_contents);
+
+  if (isASN1Type(t, 'BOOLEAN')) {
+    const v = DERContentsOctets_BOOLEAN.decode(der_contents);
     const asn1: ASN1Value<typeof t> = { t, v };
     return { asn1, entireLen };
   }
   if (isASN1Type(t, 'INTEGER')) {
     const v = DERContentsOctets_INTEGER.decode(der_contents);
+    const asn1: ASN1Value<typeof t> = { t, v };
+    return { asn1, entireLen };
+  }
+  if (isASN1Type(t, 'BIT STRING')) {
+    const v = DERContentsOctets_BIT_STRING.decode(der_contents);
+    const asn1: ASN1Value<typeof t> = { t, v };
+    return { asn1, entireLen };
+  }
+  if (isASN1Type(t, 'OCTET STRING')) {
+    const v = DERContentsOctets_OCTET_STRING.decode(der_contents);
+    const asn1: ASN1Value<typeof t> = { t, v };
+    return { asn1, entireLen };
+  }
+  if (isASN1Type(t, 'NULL')) {
+    const v = DERContentsOctets_NULL.decode(der_contents);
+    const asn1: ASN1Value<typeof t> = { t, v };
+    return { asn1, entireLen };
+  }
+  if (isASN1Type(t, 'OBJECT IDENTIFIER')) {
+    const v = DERContentsOctets_OBJECT_IDENTIFIER.decode(der_contents);
     const asn1: ASN1Value<typeof t> = { t, v };
     return { asn1, entireLen };
   }
@@ -301,6 +338,17 @@ function decodeDER(der: Uint8Array, t: ASN1Type): { asn1: ASN1Value; entireLen: 
   throw new TypeError(`decodeDER(asn1type: ${JSON.stringify(t)}) has been not implemented`);
 }
 
+function converRadix(num: number, radix: number): number[] {
+  const ans = [];
+  while (num >= radix) {
+    ans.push(num % radix);
+    num = Math.floor(num / radix);
+  }
+  ans.push(num);
+  ans.reverse();
+  return ans;
+}
+
 const DERIdentifierOctets = {
   encode: (tag: ASN1Tag, method: DERMethod): IdentifierOctets => {
     let bits8_7: number;
@@ -325,15 +373,8 @@ const DERIdentifierOctets = {
       return new Uint8Array([first_octet]) as IdentifierOctets;
     }
     const first_octet = (bits8_7 << 6) + (bit6 << 5) + 0x1f;
-    let num = tag.n as number;
-    const numlistBasedOnRasix = [];
-    const radix = 128;
-    while (num >= radix) {
-      numlistBasedOnRasix.push(num % radix);
-      num = Math.floor(num / radix);
-    }
-    numlistBasedOnRasix.push(num);
-    return new Uint8Array([first_octet, ...numlistBasedOnRasix.reverse()]) as IdentifierOctets;
+    const numlistBasedOnRasix = converRadix(tag.n, 128);
+    return new Uint8Array([first_octet, ...numlistBasedOnRasix]) as IdentifierOctets;
   },
   decode: (octets: IdentifierOctets): { tag: ASN1Tag; method: DERMethod; entireLen: number } => {
     if (octets[0] == null) throw new TypeError('正しい DER Identifier Octets を与えてください。');
@@ -412,6 +453,15 @@ const DERLengthOctets = {
   },
 };
 
+const DERContentsOctets_BOOLEAN = {
+  encode: (v: boolean): ContentsOctets => {
+    return new Uint8Array([v ? 255 : 0]) as ContentsOctets;
+  },
+  decode: (octets: ContentsOctets): boolean => {
+    return octets[0] === 255;
+  },
+};
+
 const DERContentsOctets_INTEGER = {
   encode: (v: bigint): ContentsOctets => {
     // 整数の値を２の補数表現で表す。
@@ -471,9 +521,80 @@ const DERContentsOctets_INTEGER = {
   },
 };
 
+const DERContentsOctets_BIT_STRING = {
+  encode: (v: Uint8Array): ContentsOctets => {
+    return CONCAT(new Uint8Array([0]), v) as ContentsOctets;
+  },
+  decode: (octets: ContentsOctets): Uint8Array => {
+    if (octets[0] == null) throw new TypeError('Unexpected Error');
+    if (octets[0] === 0) return octets.slice(1);
+    const contentWithPadEnd = octets
+      .slice(1)
+      .reduce((sum, i) => sum + i.toString(2).padStart(8, '0'), '');
+    const content = contentWithPadEnd.slice(0, contentWithPadEnd.length - octets[0]);
+    const contentWithPadStart = '0'.repeat(octets[0]) + content;
+    const ans = new Uint8Array(contentWithPadStart.length / 8);
+    for (let i = 0; i < ans.length; i++) {
+      ans[i] = parseInt(contentWithPadStart.substring(i * 8, (i + 1) * 8), 2);
+    }
+    return ans;
+  },
+};
+
+const DERContentsOctets_OCTET_STRING = {
+  encode: (v: Uint8Array): ContentsOctets => v as ContentsOctets,
+  decode: (octets: ContentsOctets): Uint8Array => octets,
+};
+
 const DERContentsOctets_NULL = {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  encode: (_v: undefined): ContentsOctets => new Uint8Array() as ContentsOctets,
+  encode: (v: undefined): ContentsOctets => new Uint8Array() as ContentsOctets,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  decode: (_octets: ContentsOctets): undefined => undefined,
+  decode: (octets: ContentsOctets): undefined => undefined,
+};
+
+const DERContentsOctets_OBJECT_IDENTIFIER = {
+  encode: (v: number[]): ContentsOctets => {
+    let ans: Uint8Array;
+    {
+      if (v[0] == null) throw new TypeError('Unexpected Null');
+      if (v[1] == null) {
+        return new Uint8Array([v[0] * 40]) as ContentsOctets;
+      }
+      ans = new Uint8Array([40 * v[0] + v[1]]);
+    }
+    v.slice(2).forEach((vi) => {
+      ans = CONCAT(
+        ans,
+        new Uint8Array(
+          converRadix(vi, 128).map((x, i, arr) => (i === arr.length - 1 ? x : x + 0x80))
+        )
+      );
+    });
+    return ans as ContentsOctets;
+  },
+  decode: (octets: ContentsOctets): number[] => {
+    if (octets[0] == null) throw new TypeError('Unexpected Null');
+    const ans: number[] = [];
+    // the first octet has 40 * value1 + value2
+    ans.push(Math.floor(octets[0] / 40));
+    ans.push(octets[0] % 40);
+    const covertToNumber = (octets: Uint8Array): { vi: number; entireLen: number } => {
+      let ans = 0;
+      for (let i = 0; i < octets.length; i++) {
+        const oi = octets[i];
+        if (oi == null) return { vi: ans, entireLen: i };
+        if (oi < 0x80) return { vi: ans * 0x80 + oi, entireLen: i + 1 };
+        ans = ans * 0x80 + (oi - 0x80);
+      }
+      return { vi: ans, entireLen: octets.length };
+    };
+    let start = 1;
+    do {
+      const { vi, entireLen } = covertToNumber(octets.slice(start));
+      ans.push(vi);
+      start += entireLen;
+    } while (start < octets.length);
+    return ans;
+  },
 };
