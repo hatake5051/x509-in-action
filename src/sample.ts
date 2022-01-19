@@ -1,4 +1,5 @@
 import { DER } from 'der';
+import { UTF8 } from 'utility';
 import {
   ASN1CHOICE,
   ASN1ExplicitTag,
@@ -45,7 +46,7 @@ const eq = (x: ASN1Type, y: ASN1Type) => {
 };
 
 console.group('NULL check');
-eq('NULL', 'ANY');
+eq('NULL', { ANY: {} });
 const asn1_null: ASN1Value<'NULL'> = { t: 'NULL', v: undefined };
 const der_null = DER.encode(asn1_null);
 console.log(der_null, BASE64(der_null));
@@ -54,7 +55,7 @@ console.log(decoded_null);
 console.groupEnd();
 
 console.group('BOOLEAN check');
-eq('BOOLEAN', 'ANY');
+eq('BOOLEAN', { ANY: {} });
 const asn1_boolean: ASN1Value<'BOOLEAN'> = { t: 'BOOLEAN', v: true };
 const der_boolean = DER.encode(asn1_boolean);
 console.log(der_boolean, BASE64(der_boolean));
@@ -63,7 +64,7 @@ console.log(decoded_boolean);
 console.groupEnd();
 
 console.group('INTEGER check');
-eq('INTEGER', 'ANY');
+eq('INTEGER', { ANY: {} });
 const asn1_integer: ASN1Value<'INTEGER'> = { t: 'INTEGER', v: -129n };
 const der_integer = DER.encode(asn1_integer);
 console.log(der_integer, BASE64(der_integer));
@@ -72,7 +73,7 @@ console.log(decoded_integer);
 console.groupEnd();
 
 console.group('BIT STRING check');
-eq('BIT STRING', 'ANY');
+eq('BIT STRING', { ANY: {} });
 const asn1_bitstring: ASN1Value<'BIT STRING'> = {
   t: 'BIT STRING',
   v: new Uint8Array([
@@ -206,15 +207,31 @@ console.group('X509 Certificate');
 const AlgorithmIdentifier = ASN1SEQUENCE(
   {
     algorithm: 'OBJECT IDENTIFIER',
-    parameters: { OPTIONAL: 'ANY' },
+    parameters: {
+      OPTIONAL: { ANY: { DEFIEND_BY: 'algorithm', typeDerive: () => 'OBJECT IDENTIFIER' } },
+    },
   },
   ['algorithm', 'parameters']
 );
 
+console.group('X509 AlgorithmIdentifier');
+const asn1_aid: ASN1Value<typeof AlgorithmIdentifier> = {
+  t: AlgorithmIdentifier,
+  v: {
+    algorithm: [1, 2, 840, 10045, 2, 1],
+    parameters: { v: [1, 2, 840, 10045, 3, 1, 7] },
+  },
+};
+const der_aid = DER.encode(asn1_aid);
+console.log(der_aid, BASE64(der_aid));
+const decoded_aid = DER.decode(der_aid, AlgorithmIdentifier);
+console.log(decoded_aid);
+console.groupEnd();
+
 const AttributeTypeAndValue = ASN1SEQUENCE(
   {
     type: 'OBJECT IDENTIFIER',
-    value: 'ANY',
+    value: { ANY: { DEFIEND_BY: 'type', typeDerive: () => 'OCTET STRING' } },
   },
   ['type', 'value']
 );
@@ -263,7 +280,18 @@ const TBSCertificate = ASN1SEQUENCE(
     subjectUniqueID: { OPTIONAL: ASN1ImplicitTag(2 as ASN1TagNumber, UniqueIdentifier) },
     extensions: { OPTIONAL: ASN1ImplicitTag(3 as ASN1TagNumber, Extensions) },
   },
-  ['version', 'serialNumber', 'signature', 'issuer', 'validity', 'subject', 'subjectPublicKeyInfo']
+  [
+    'version',
+    'serialNumber',
+    'signature',
+    'issuer',
+    'validity',
+    'subject',
+    'subjectPublicKeyInfo',
+    'issuerUniqueID',
+    'subjectUniqueID',
+    'extensions',
+  ]
 );
 
 const Certificate = ASN1SEQUENCE(
@@ -283,9 +311,9 @@ const asn1_crt: ASN1Value<typeof Certificate> = {
       signature: { algorithm: [1, 2, 840, 10045, 4, 3, 2] },
       issuer: {
         v: [
-          new Set([{ type: [2, 5, 4, 6], value: 'US' }]),
-          new Set([{ type: [2, 5, 4, 10], value: 'Amazon' }]),
-          new Set([{ type: [2, 5, 4, 3], value: 'Amazon Root CA 3' }]),
+          new Set([{ type: [2, 5, 4, 6], value: { v: UTF8('US') } }]),
+          new Set([{ type: [2, 5, 4, 10], value: { v: UTF8('Amazon') } }]),
+          new Set([{ type: [2, 5, 4, 3], value: { v: UTF8('Amazon Root CA 3') } }]),
         ],
       },
       validity: {
@@ -294,15 +322,15 @@ const asn1_crt: ASN1Value<typeof Certificate> = {
       },
       subject: {
         v: [
-          new Set([{ type: [2, 5, 4, 6], value: 'US' }]),
-          new Set([{ type: [2, 5, 4, 10], value: 'Amazon' }]),
-          new Set([{ type: [2, 5, 4, 3], value: 'Amazon Root CA 3' }]),
+          new Set([{ type: [2, 5, 4, 6], value: { v: UTF8('US') } }]),
+          new Set([{ type: [2, 5, 4, 10], value: { v: UTF8('Amazon') } }]),
+          new Set([{ type: [2, 5, 4, 3], value: { v: UTF8('Amazon Root CA 3') } }]),
         ],
       },
       subjectPublicKeyInfo: {
         algorithm: {
           algorithm: [1, 2, 840, 10045, 2, 1],
-          parameters: [1, 2, 840, 10045, 3, 1, 7],
+          parameters: { v: [1, 2, 840, 10045, 3, 1, 7] },
         },
         subjectPublicKey: new Uint8Array([
           4, 41, 151, 167, 198, 65, 127, 192, 13, 155, 232, 1, 27, 86, 198, 242, 82, 165, 186, 45,

@@ -77,7 +77,6 @@ export { DER };
 type DERMethod = 'Primitive' | 'Constructed';
 
 function ASN1Type_to_DERMethod(t: ASN1Type): DERMethod {
-  if (t === 'ANY') throw new TypeError('ANY  は DER encode できません');
   if (
     t === 'BOOLEAN' ||
     t === 'INTEGER' ||
@@ -90,7 +89,8 @@ function ASN1Type_to_DERMethod(t: ASN1Type): DERMethod {
     return 'Primitive';
   if ('EXPLICIT' in t || 'SEQUENCE' in t || 'SEQUENCEOF' in t || 'SETOF' in t) return 'Constructed';
   if ('IMPLICIT' in t) return ASN1Type_to_DERMethod(t.t);
-  if ('CHOICE' in t) throw new TypeError(`${JSON.stringify(t)} は DER encode できない`);
+  if ('CHOICE' in t || 'ANY' in t)
+    throw new TypeError(`${JSON.stringify(t)} は DER encode できない`);
   throw new TypeError(`ASN1Type_to_DERMethod(${JSON.stringify(t)}) has not been implmented`);
 }
 
@@ -113,12 +113,14 @@ const serialize = (x: {
   contents: ContentsOctets;
 }): Uint8Array => CONCAT(CONCAT(x.id, x.len), x.contents);
 
-function encodeDER(asn1: ASN1Value): {
+function encodeDER(
+  asn1: ASN1Value,
+  parentSEQUENCE?: Record<string, unknown>
+): {
   id: IdentifierOctets;
   len: LengthOctets;
   contents: ContentsOctets;
 } {
-  console.log('now encoding...', asn1.t);
   if (checkASN1Value(asn1, 'CHOICE')) {
     for (const t of Object.values(asn1.t.CHOICE)) {
       const inner = { v: asn1.v.v, t };
@@ -128,6 +130,16 @@ function encodeDER(asn1: ASN1Value): {
       return encodeDER(inner);
     }
     throw new TypeError(`asn1 value が CHOICE を満たせていない`);
+  }
+  if (checkASN1Value(asn1, 'ANY')) {
+    const derive = asn1.v.typeDerive ?? asn1.t.ANY.typeDerive;
+    if (derive == null) throw new TypeError('ANY の actual type を判断できません');
+    const t = derive(
+      asn1.t.ANY.DEFIEND_BY == null || parentSEQUENCE == null
+        ? undefined
+        : parentSEQUENCE[asn1.t.ANY.DEFIEND_BY]
+    );
+    return encodeDER({ v: asn1.v.v, t });
   }
   const id = DERIdentifierOctets.encode(ASN1Type_to_ASN1Tag(asn1.t), ASN1Type_to_DERMethod(asn1.t));
   const ans = (contents: ContentsOctets) => ({
@@ -182,7 +194,7 @@ function encodeDER(asn1: ASN1Value): {
         }
         t = t.OPTIONAL;
       }
-      const component = encodeDER({ v: asn1.v[id], t });
+      const component = encodeDER({ v: asn1.v[id], t }, asn1.v);
       return CONCAT(prev, serialize(component));
     }, new Uint8Array()) as ContentsOctets;
     return ans(contents);
@@ -225,16 +237,33 @@ function encodeDER(asn1: ASN1Value): {
   throw new TypeError('not implemented');
 }
 
-function decodeDER(der: Uint8Array, t: ASN1Type): { asn1: ASN1Value; entireLen: number } {
+function decodeDER(
+  der: Uint8Array,
+  t: ASN1Type,
+  parentSEQUENCE?: Record<string, unknown>
+): { asn1: ASN1Value; entireLen: number } {
   if (isASN1Type(t, 'CHOICE')) {
-    for (const inner of Object.values(t.CHOICE)) {
+    for (const innerType of Object.values(t.CHOICE)) {
       try {
-        return decodeDER(der, inner);
+        const { asn1: inner, entireLen } = decodeDER(der, innerType);
+        return {
+          asn1: { t, v: { v: inner.v } },
+          entireLen,
+        };
       } catch (e) {
         continue;
       }
     }
     throw new TypeError(`パースエラー。 CHOICE のいずれの型を用いても解析できない`);
+  }
+  if (isASN1Type(t, 'ANY')) {
+    if (t.ANY.typeDerive == null) throw new TypeError('ANY の actual Type を決定できない');
+    const actualType = t.ANY.typeDerive(
+      parentSEQUENCE == null || t.ANY.DEFIEND_BY == null
+        ? undefined
+        : parentSEQUENCE[t.ANY.DEFIEND_BY]
+    );
+    return decodeDER(der, actualType);
   }
   const { tag, method, entireLen: leni } = DERIdentifierOctets.decode(der as IdentifierOctets);
   if (!eqASN1Tag(ASN1Type_to_ASN1Tag(t), tag)) {
@@ -295,20 +324,30 @@ function decodeDER(der: Uint8Array, t: ASN1Type): { asn1: ASN1Value; entireLen: 
     let v: Partial<ASN1Value<typeof t>['v']> = {};
     let start = 0;
     for (const id of t.order) {
+      if (der_contents.length <= start) {
+        break;
+      }
       let tt = t.SEQUENCE[id];
       if (tt == null) throw new TypeError(`Unexpected null`);
       if (isObject(tt) && 'OPTIONAL' in tt) {
-        const { tag: ttag } = DERIdentifierOctets.decode(
-          der_contents.slice(start) as IdentifierOctets
-        );
-        if (!eqASN1Tag(ASN1Type_to_ASN1Tag(tt.OPTIONAL), ttag)) {
-          continue;
+        if (!isASN1Type(tt.OPTIONAL, 'ANY')) {
+          const { tag: ttag } = DERIdentifierOctets.decode(
+            der_contents.slice(start) as IdentifierOctets
+          );
+          if (!eqASN1Tag(ASN1Type_to_ASN1Tag(tt.OPTIONAL), ttag)) {
+            continue;
+          }
         }
         tt = tt.OPTIONAL;
       }
-      const { asn1: component, entireLen: tlen } = decodeDER(der_contents.slice(start), tt);
-      v = { ...v, [id]: component.v };
-      start += tlen;
+      try {
+        const { asn1: component, entireLen: tlen } = decodeDER(der_contents.slice(start), tt, v);
+        v = { ...v, [id]: component.v };
+        start += tlen;
+      } catch (e) {
+        if (isASN1Type(tt, 'ANY')) continue;
+        throw e;
+      }
     }
     const asn1: ASN1Value<typeof t> = { v, t };
     if (!isASN1Value(asn1)) {
@@ -317,7 +356,7 @@ function decodeDER(der: Uint8Array, t: ASN1Type): { asn1: ASN1Value; entireLen: 
     return { asn1, entireLen };
   }
   if (isASN1Type(t, 'SEQUENCEOF')) {
-    const v: unknown[] = [];
+    const v: ASN1Value<typeof t>['v'] = [];
     for (let start = 0; start < contentsLength; ) {
       const { asn1: component, entireLen: tlen } = decodeDER(
         der_contents.slice(start),
@@ -333,7 +372,7 @@ function decodeDER(der: Uint8Array, t: ASN1Type): { asn1: ASN1Value; entireLen: 
     return { asn1, entireLen };
   }
   if (isASN1Type(t, 'SETOF')) {
-    const v = new Set();
+    const v: ASN1Value<typeof t>['v'] = new Set();
     for (let start = 0; start < contentsLength; ) {
       const { asn1: component, entireLen: tlen } = decodeDER(der_contents.slice(start), t.SETOF);
       v.add(component.v);
