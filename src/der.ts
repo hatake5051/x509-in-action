@@ -118,6 +118,7 @@ function encodeDER(asn1: ASN1Value): {
   len: LengthOctets;
   contents: ContentsOctets;
 } {
+  console.log('now encoding...', asn1.t);
   if (checkASN1Value(asn1, 'CHOICE')) {
     for (const t of Object.values(asn1.t.CHOICE)) {
       const inner = { v: asn1.v.v, t };
