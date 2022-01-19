@@ -220,7 +220,7 @@ type ASN1SimpleType_to_TSType<T extends ASN1SimpleType> = T extends 'INTEGER'
   : T extends 'OBJECT IDENTIFIER'
   ? number[]
   : T extends 'UTCTime'
-  ? string
+  ? Date
   : T extends 'BOOLEAN'
   ? boolean
   : T extends 'OCTET STRING'

@@ -129,8 +129,8 @@ const ASN1Cert: ASN1Value<typeof Certificate> = {
         ],
       },
       validity: {
-        notBefore: { v: '150526000000Z' },
-        notAfter: { v: '400526000000Z' },
+        notBefore: { v: new Date(Date.UTC(2015, 5 - 1, 26)) },
+        notAfter: { v: new Date(Date.UTC(2040, 5 - 1, 26)) },
       },
       subject: {
         v: [
@@ -231,6 +231,17 @@ const der_oid = DER.encode(asn1_oid);
 console.log(der_oid, BASE64(der_oid));
 const decoded_oid = DER.decode(der_oid, 'OBJECT IDENTIFIER');
 console.log(decoded_oid);
+console.groupEnd();
+
+console.group('UTCTime check');
+const asn1_utctime: ASN1Value<'UTCTime'> = {
+  t: 'UTCTime',
+  v: new Date(Date.UTC(2015, 5 - 1, 26)),
+};
+const der_utctime = DER.encode(asn1_utctime);
+console.log(der_utctime, BASE64(der_utctime));
+const decoded_utctime = DER.decode(der_utctime, 'UTCTime');
+console.log(decoded_utctime);
 console.groupEnd();
 
 console.group('IMPLICIT check');

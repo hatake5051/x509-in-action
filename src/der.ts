@@ -1,4 +1,4 @@
-import { CONCAT, isObject } from 'utility';
+import { CONCAT, isObject, UTF8, UTF8_DECODE } from 'utility';
 import {
   ASN1Tag,
   ASN1TagNumber,
@@ -158,6 +158,10 @@ function encodeDER(asn1: ASN1Value): {
     const contents = DERContentsOctets_OBJECT_IDENTIFIER.encode(asn1.v);
     return ans(contents);
   }
+  if (checkASN1Value(asn1, 'UTCTime')) {
+    const contents = DERContentsOctets_UTCTIME.encode(asn1.v);
+    return ans(contents);
+  }
   if (checkASN1Value(asn1, 'IMPLICIT')) {
     const der = encodeDER({ v: asn1.v.v, t: asn1.t.t });
     return { id, len: der.len, contents: der.contents };
@@ -267,6 +271,11 @@ function decodeDER(der: Uint8Array, t: ASN1Type): { asn1: ASN1Value; entireLen: 
   }
   if (isASN1Type(t, 'OBJECT IDENTIFIER')) {
     const v = DERContentsOctets_OBJECT_IDENTIFIER.decode(der_contents);
+    const asn1: ASN1Value<typeof t> = { t, v };
+    return { asn1, entireLen };
+  }
+  if (isASN1Type(t, 'UTCTime')) {
+    const v = DERContentsOctets_UTCTIME.decode(der_contents);
     const asn1: ASN1Value<typeof t> = { t, v };
     return { asn1, entireLen };
   }
@@ -596,5 +605,37 @@ const DERContentsOctets_OBJECT_IDENTIFIER = {
       start += entireLen;
     } while (start < octets.length);
     return ans;
+  },
+};
+
+const DERContentsOctets_UTCTIME = {
+  encode: (v: Date): ContentsOctets => {
+    if (v.getFullYear() > 2049) throw new TypeError('Generalized Time を使用してください');
+    const ans =
+      `${v.getUTCFullYear() % 100}`.padStart(2, '0') +
+      `${v.getUTCMonth() + 1}`.padStart(2, '0') +
+      `${v.getUTCDate()}`.padStart(2, '0') +
+      `${v.getUTCHours()}`.padStart(2, '0') +
+      `${v.getUTCMinutes()}`.padStart(2, '0') +
+      `${v.getUTCSeconds()}`.padStart(2, '0') +
+      'Z';
+    return UTF8(ans) as ContentsOctets;
+  },
+  decode: (octets: ContentsOctets): Date => {
+    const utcstr = UTF8_DECODE(octets);
+    const y = parseInt(utcstr.slice(0, 2));
+    if (isNaN(y)) throw new TypeError('UTCTime の year パースに失敗');
+    const m = parseInt(utcstr.slice(2, 4));
+    if (isNaN(m)) throw new TypeError('UTCTime の month パースに失敗');
+    const d = parseInt(utcstr.slice(4, 6));
+    if (isNaN(d)) throw new TypeError('UTCTime の date パースに失敗');
+    const h = parseInt(utcstr.slice(6, 8));
+    if (isNaN(h)) throw new TypeError('UTCTime の hours パースに失敗');
+    const min = parseInt(utcstr.slice(8, 10));
+    if (isNaN(min)) throw new TypeError('UTCTime の minutie パースに失敗');
+    const sec = parseInt(utcstr.slice(10, 12));
+    if (isNaN(sec)) throw new TypeError('UTCTime の seconds パースに失敗');
+    if (!utcstr.slice(12).startsWith('Z')) throw new TypeError('UTCTime パースに失敗');
+    return new Date(Date.UTC(y > 49 ? y + 1900 : y + 2000, m - 1, d, h, min, sec));
   },
 };

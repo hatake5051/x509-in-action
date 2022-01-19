@@ -13,6 +13,24 @@ function CONCAT(A, B) {
     return ans;
 }
 /**
+ * 文字列を UTF8 バイトエンコードする。(string to Uint8Array)
+ * @param {string} STRING - 文字列
+ * @return {Uint8Array} UTF8 バイト列
+ */
+function UTF8(STRING) {
+    const encoder = new TextEncoder();
+    return encoder.encode(STRING);
+}
+/**
+ * 文字列に UTF8 バイトデコードする (Uint8Array to string)
+ * @param {Uint8Array} OCTETS - UTF8 バイト列
+ * @return {string} 文字列
+ */
+function UTF8_DECODE(OCTETS) {
+    const decoder = new TextDecoder();
+    return decoder.decode(OCTETS);
+}
+/**
  * value を WouldBE<T> かどうか判定する。
  * T のプロパティを持つかもしれないところまで。
  * ref: https://qiita.com/suin/items/e0f7b7add75092196cd8
@@ -348,6 +366,10 @@ function encodeDER(asn1) {
         const contents = DERContentsOctets_OBJECT_IDENTIFIER.encode(asn1.v);
         return ans(contents);
     }
+    if (checkASN1Value(asn1, 'UTCTime')) {
+        const contents = DERContentsOctets_UTCTIME.encode(asn1.v);
+        return ans(contents);
+    }
     if (checkASN1Value(asn1, 'IMPLICIT')) {
         const der = encodeDER({ v: asn1.v.v, t: asn1.t.t });
         return { id, len: der.len, contents: der.contents };
@@ -460,6 +482,11 @@ function decodeDER(der, t) {
     }
     if (isASN1Type(t, 'OBJECT IDENTIFIER')) {
         const v = DERContentsOctets_OBJECT_IDENTIFIER.decode(der_contents);
+        const asn1 = { t, v };
+        return { asn1, entireLen };
+    }
+    if (isASN1Type(t, 'UTCTime')) {
+        const v = DERContentsOctets_UTCTIME.decode(der_contents);
         const asn1 = { t, v };
         return { asn1, entireLen };
     }
@@ -756,7 +783,6 @@ const DERContentsOctets_OBJECT_IDENTIFIER = {
         return ans;
     },
     decode: (octets) => {
-        console.log('OCTET ', octets);
         if (octets[0] == null)
             throw new TypeError('Unexpected Null');
         const ans = [];
@@ -764,7 +790,6 @@ const DERContentsOctets_OBJECT_IDENTIFIER = {
         ans.push(Math.floor(octets[0] / 40));
         ans.push(octets[0] % 40);
         const covertToNumber = (octets) => {
-            console.log(`aaa`, octets);
             let ans = 0;
             for (let i = 0; i < octets.length; i++) {
                 const oi = octets[i];
@@ -779,11 +804,48 @@ const DERContentsOctets_OBJECT_IDENTIFIER = {
         let start = 1;
         do {
             const { vi, entireLen } = covertToNumber(octets.slice(start));
-            console.log(vi, entireLen);
             ans.push(vi);
             start += entireLen;
         } while (start < octets.length);
         return ans;
+    },
+};
+const DERContentsOctets_UTCTIME = {
+    encode: (v) => {
+        if (v.getFullYear() > 2049)
+            throw new TypeError('Generalized Time を使用してください');
+        const ans = `${v.getUTCFullYear() % 100}`.padStart(2, '0') +
+            `${v.getUTCMonth() + 1}`.padStart(2, '0') +
+            `${v.getUTCDate()}`.padStart(2, '0') +
+            `${v.getUTCHours()}`.padStart(2, '0') +
+            `${v.getUTCMinutes()}`.padStart(2, '0') +
+            `${v.getUTCSeconds()}`.padStart(2, '0') +
+            'Z';
+        return UTF8(ans);
+    },
+    decode: (octets) => {
+        const utcstr = UTF8_DECODE(octets);
+        const y = parseInt(utcstr.slice(0, 2));
+        if (isNaN(y))
+            throw new TypeError('UTCTime の year パースに失敗');
+        const m = parseInt(utcstr.slice(2, 4));
+        if (isNaN(m))
+            throw new TypeError('UTCTime の month パースに失敗');
+        const d = parseInt(utcstr.slice(4, 6));
+        if (isNaN(d))
+            throw new TypeError('UTCTime の date パースに失敗');
+        const h = parseInt(utcstr.slice(6, 8));
+        if (isNaN(h))
+            throw new TypeError('UTCTime の hours パースに失敗');
+        const min = parseInt(utcstr.slice(8, 10));
+        if (isNaN(min))
+            throw new TypeError('UTCTime の minutie パースに失敗');
+        const sec = parseInt(utcstr.slice(10, 12));
+        if (isNaN(sec))
+            throw new TypeError('UTCTime の seconds パースに失敗');
+        if (!utcstr.slice(12).startsWith('Z'))
+            throw new TypeError('UTCTime パースに失敗');
+        return new Date(Date.UTC(y > 49 ? y + 1900 : y + 2000, m - 1, d, h, min, sec));
     },
 };
 
@@ -916,6 +978,16 @@ const der_oid = DER.encode(asn1_oid);
 console.log(der_oid, BASE64(der_oid));
 const decoded_oid = DER.decode(der_oid, 'OBJECT IDENTIFIER');
 console.log(decoded_oid);
+console.groupEnd();
+console.group('UTCTime check');
+const asn1_utctime = {
+    t: 'UTCTime',
+    v: new Date(Date.UTC(2015, 5 - 1, 26)),
+};
+const der_utctime = DER.encode(asn1_utctime);
+console.log(der_utctime, BASE64(der_utctime));
+const decoded_utctime = DER.decode(der_utctime, 'UTCTime');
+console.log(decoded_utctime);
 console.groupEnd();
 console.group('IMPLICIT check');
 const implicitTagged = ASN1ImplicitTag(23, 'INTEGER');
