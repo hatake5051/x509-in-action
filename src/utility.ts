@@ -1,14 +1,26 @@
-/**
- * ２つのバイト列を結合する
- * @param {Uint8Array} A - 先頭バイト列
- * @param {Uint8Array} B - 後続バイト列
- * @return {Uint8Array} A の後ろに B をつなげたバイト列 A || B
- */
-export function CONCAT(A: Uint8Array, B: Uint8Array): Uint8Array {
-  const ans = new Uint8Array(A.length + B.length);
-  ans.set(A);
-  ans.set(B, A.length);
+export function converRadix(num: number, radix: number): number[] {
+  const ans = [];
+  while (num >= radix) {
+    ans.push(num % radix);
+    num = Math.floor(num / radix);
+  }
+  ans.push(num);
+  ans.reverse();
   return ans;
+}
+
+/**
+ * 複数のバイト列を結合する
+ * @param arrays
+ * @returns arrays を平滑化する
+ */
+export function CONCAT(...arrays: Uint8Array[]): Uint8Array {
+  return arrays.reduce((A, B) => {
+    const ans = new Uint8Array(A.length + B.length);
+    ans.set(A);
+    ans.set(B, A.length);
+    return ans;
+  }, new Uint8Array());
 }
 
 /**

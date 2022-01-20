@@ -1,17 +1,10 @@
+import { ASN1Value, eqType, Type } from 'asn1';
+import { CHOICE } from 'asn1/other';
+import { SEQUENCE, SEQUENCEOF, SETOF } from 'asn1/structured';
+import { TagNumber } from 'asn1/tag';
+import { ExplicitTag, ImplicitTag } from 'asn1/tagged';
 import { DER } from 'der';
 import { UTF8 } from 'utility';
-import {
-  ASN1CHOICE,
-  ASN1ExplicitTag,
-  ASN1ImplicitTag,
-  ASN1SEQUENCE,
-  ASN1SEQUENCEOF,
-  ASN1SETOF,
-  ASN1TagNumber,
-  ASN1Type,
-  ASN1Value,
-  eqASN1Type,
-} from './asn1';
 
 /**
  * バイナリに文字列を BASE64 デコードする。
@@ -40,14 +33,14 @@ function BASE64(OCTETS: Uint8Array): string {
   return base64_encode;
 }
 
-const eq = (x: ASN1Type, y: ASN1Type) => {
-  console.log(x, '===', y, '?', eqASN1Type(x, y));
-  console.log(`${JSON.stringify(y)} === ${JSON.stringify(x)} ? ${eqASN1Type(y, x)}`);
+const eq = (x: Type, y: Type) => {
+  console.log(x, '===', y, '?', eqType(x, y));
+  console.log(`${JSON.stringify(y)} === ${JSON.stringify(x)} ? ${eqType(y, x)}`);
 };
 
 console.group('NULL check');
 eq('NULL', { ANY: {} });
-const asn1_null: ASN1Value<'NULL'> = { t: 'NULL', v: undefined };
+const asn1_null: ASN1Value<'NULL'> = { type: 'NULL', value: undefined };
 const der_null = DER.encode(asn1_null);
 console.log(der_null, BASE64(der_null));
 const decoded_null = DER.decode(der_null, 'NULL');
@@ -56,7 +49,7 @@ console.groupEnd();
 
 console.group('BOOLEAN check');
 eq('BOOLEAN', { ANY: {} });
-const asn1_boolean: ASN1Value<'BOOLEAN'> = { t: 'BOOLEAN', v: true };
+const asn1_boolean: ASN1Value<'BOOLEAN'> = { type: 'BOOLEAN', value: true };
 const der_boolean = DER.encode(asn1_boolean);
 console.log(der_boolean, BASE64(der_boolean));
 const decoded_boolean = DER.decode(der_boolean, 'BOOLEAN');
@@ -65,7 +58,7 @@ console.groupEnd();
 
 console.group('INTEGER check');
 eq('INTEGER', { ANY: {} });
-const asn1_integer: ASN1Value<'INTEGER'> = { t: 'INTEGER', v: -129n };
+const asn1_integer: ASN1Value<'INTEGER'> = { type: 'INTEGER', value: -129n };
 const der_integer = DER.encode(asn1_integer);
 console.log(der_integer, BASE64(der_integer));
 const decoded_integer = DER.decode(der_integer, 'INTEGER');
@@ -75,8 +68,8 @@ console.groupEnd();
 console.group('BIT STRING check');
 eq('BIT STRING', { ANY: {} });
 const asn1_bitstring: ASN1Value<'BIT STRING'> = {
-  t: 'BIT STRING',
-  v: new Uint8Array([
+  type: 'BIT STRING',
+  value: new Uint8Array([
     4, 41, 151, 167, 198, 65, 127, 192, 13, 155, 232, 1, 27, 86, 198, 242, 82, 165, 186, 45, 178,
     18, 232, 210, 46, 215, 250, 201, 197, 216, 170, 109, 31, 115, 129, 59, 59, 152, 107, 57, 124,
     51, 165, 197, 78, 134, 142, 128, 23, 104, 98, 69, 87, 125, 68, 88, 29, 179, 55, 229, 103, 8,
@@ -91,8 +84,8 @@ console.groupEnd();
 
 console.group('OCTET STRING check');
 const asn1_octetstring: ASN1Value<'OCTET STRING'> = {
-  t: 'OCTET STRING',
-  v: new Uint8Array([48, 3, 1, 1, 255]),
+  type: 'OCTET STRING',
+  value: new Uint8Array([48, 3, 1, 1, 255]),
 };
 const der_octetstring = DER.encode(asn1_octetstring);
 console.log(der_octetstring, BASE64(der_octetstring));
@@ -102,8 +95,8 @@ console.groupEnd();
 
 console.group('OBJECT IDENTIFIER check');
 const asn1_oid: ASN1Value<'OBJECT IDENTIFIER'> = {
-  t: 'OBJECT IDENTIFIER',
-  v: [1, 2, 840, 10045, 4, 3, 2],
+  type: 'OBJECT IDENTIFIER',
+  value: [1, 2, 840, 10045, 4, 3, 2],
 };
 const der_oid = DER.encode(asn1_oid);
 console.log(der_oid, BASE64(der_oid));
@@ -113,8 +106,8 @@ console.groupEnd();
 
 console.group('UTCTime check');
 const asn1_utctime: ASN1Value<'UTCTime'> = {
-  t: 'UTCTime',
-  v: new Date(Date.UTC(2015, 5 - 1, 26)),
+  type: 'UTCTime',
+  value: new Date(Date.UTC(2015, 5 - 1, 26)),
 };
 const der_utctime = DER.encode(asn1_utctime);
 console.log(der_utctime, BASE64(der_utctime));
@@ -123,10 +116,10 @@ console.log(decoded_utctime);
 console.groupEnd();
 
 console.group('IMPLICIT check');
-const implicitTagged = ASN1ImplicitTag(23 as ASN1TagNumber, 'INTEGER');
+const implicitTagged = ImplicitTag(23 as TagNumber, 'INTEGER');
 const asn1_implicitTagged: ASN1Value<typeof implicitTagged> = {
-  t: implicitTagged,
-  v: { v: 65535n },
+  type: implicitTagged,
+  value: { IMPLICIT: 65535n },
 };
 const der_implicitTagged = DER.encode(asn1_implicitTagged);
 console.log(der_implicitTagged, BASE64(der_implicitTagged));
@@ -135,10 +128,10 @@ console.log(decoded_implicitTagged);
 console.groupEnd();
 
 console.group('EXPLICIT check');
-const explicitTagged = ASN1ExplicitTag(18 as ASN1TagNumber, 'INTEGER');
+const explicitTagged = ExplicitTag(18 as TagNumber, 'INTEGER');
 const asn1_explicitTagged: ASN1Value<typeof explicitTagged> = {
-  t: explicitTagged,
-  v: { v: 12345n },
+  type: explicitTagged,
+  value: { EXPLICIT: 12345n },
 };
 const der_explicitTagged = DER.encode(asn1_explicitTagged);
 console.log(der_explicitTagged, BASE64(der_explicitTagged));
@@ -147,17 +140,17 @@ console.log(decoded_explicitTagged);
 console.groupEnd();
 
 console.group('SEQUENCE check');
-const sequence = ASN1SEQUENCE(
+const sequence = SEQUENCE(
   {
-    version: ASN1ExplicitTag(0 as ASN1TagNumber, 'INTEGER'),
+    version: ExplicitTag(0 as TagNumber, 'INTEGER'),
     serialNumber: 'INTEGER',
   },
   ['version', 'serialNumber']
 );
 const asn1_sequence: ASN1Value<typeof sequence> = {
-  t: sequence,
-  v: {
-    version: { v: 2n },
+  type: sequence,
+  value: {
+    version: { EXPLICIT: 2n },
     serialNumber: 143266986699090766294700635381230934788665930n,
   },
 };
@@ -168,10 +161,10 @@ console.log(decoded_sequence);
 console.groupEnd();
 
 console.group('SEQUENCE OF Check');
-const sequenceof = ASN1SEQUENCEOF('INTEGER');
+const sequenceof = SEQUENCEOF('INTEGER');
 const asn1_sequenceof: ASN1Value<typeof sequenceof> = {
-  t: sequenceof,
-  v: [1n, 2n, 3n, 65535n, 5n, 143266986699090766294700635381230934788665930n],
+  type: sequenceof,
+  value: [1n, 2n, 3n, 65535n, 5n, 143266986699090766294700635381230934788665930n],
 };
 const der_sequenceof = DER.encode(asn1_sequenceof);
 console.log(der_sequenceof, BASE64(der_sequenceof));
@@ -180,10 +173,10 @@ console.log(decoded_sequenceof);
 console.groupEnd();
 
 console.group('SET OF Check');
-const setof = ASN1SETOF('INTEGER');
+const setof = SETOF('INTEGER');
 const asn1_setof: ASN1Value<typeof setof> = {
-  t: setof,
-  v: new Set([2n, 1n, 3n, 65535n, 5n, 143266986699090766294700635381230934788665930n]),
+  type: setof,
+  value: new Set([2n, 1n, 3n, 65535n, 5n, 143266986699090766294700635381230934788665930n]),
 };
 const der_setof = DER.encode(asn1_setof);
 console.log(der_setof, BASE64(der_setof));
@@ -192,10 +185,10 @@ console.log(decoded_setof);
 console.groupEnd();
 
 console.group('CHOICE Check');
-const choice = ASN1CHOICE({ a: 'INTEGER', b: ASN1ExplicitTag(7 as ASN1TagNumber, 'NULL') });
+const choice = CHOICE({ a: 'INTEGER', b: ExplicitTag(7 as TagNumber, 'NULL') });
 const asn1_choice: ASN1Value<typeof choice> = {
-  t: choice,
-  v: { v: { v: undefined } },
+  type: choice,
+  value: { CHOICE: { EXPLICIT: undefined } },
 };
 const der_choice = DER.encode(asn1_choice);
 console.log(der_choice, BASE64(der_choice));
@@ -204,7 +197,7 @@ console.log(decoded_choice);
 console.groupEnd();
 
 console.group('X509 Certificate');
-const AlgorithmIdentifier = ASN1SEQUENCE(
+const AlgorithmIdentifier = SEQUENCE(
   {
     algorithm: 'OBJECT IDENTIFIER',
     parameters: {
@@ -216,10 +209,10 @@ const AlgorithmIdentifier = ASN1SEQUENCE(
 
 console.group('X509 AlgorithmIdentifier');
 const asn1_aid: ASN1Value<typeof AlgorithmIdentifier> = {
-  t: AlgorithmIdentifier,
-  v: {
+  type: AlgorithmIdentifier,
+  value: {
     algorithm: [1, 2, 840, 10045, 2, 1],
-    parameters: { v: [1, 2, 840, 10045, 3, 1, 7] },
+    parameters: { ANY: [1, 2, 840, 10045, 3, 1, 7] },
   },
 };
 const der_aid = DER.encode(asn1_aid);
@@ -228,7 +221,7 @@ const decoded_aid = DER.decode(der_aid, AlgorithmIdentifier);
 console.log(decoded_aid);
 console.groupEnd();
 
-const AttributeTypeAndValue = ASN1SEQUENCE(
+const AttributeTypeAndValue = SEQUENCE(
   {
     type: 'OBJECT IDENTIFIER',
     value: { ANY: { DEFIEND_BY: 'type', typeDerive: () => 'OCTET STRING' } },
@@ -236,17 +229,17 @@ const AttributeTypeAndValue = ASN1SEQUENCE(
   ['type', 'value']
 );
 
-const RelativeDistinguishedName = ASN1SETOF(AttributeTypeAndValue);
-const RDNSequence = ASN1SEQUENCEOF(RelativeDistinguishedName);
-const Name = ASN1CHOICE({ rdnSequence: RDNSequence });
+const RelativeDistinguishedName = SETOF(AttributeTypeAndValue);
+const RDNSequence = SEQUENCEOF(RelativeDistinguishedName);
+const Name = CHOICE({ rdnSequence: RDNSequence });
 
-const Time = ASN1CHOICE({
+const Time = CHOICE({
   utcTime: 'UTCTime',
   // generalTime: 'GeneralizedTime'
 });
-const Validity = ASN1SEQUENCE({ notBefore: Time, notAfter: Time }, ['notBefore', 'notAfter']);
+const Validity = SEQUENCE({ notBefore: Time, notAfter: Time }, ['notBefore', 'notAfter']);
 
-const SubjectPublicKeyInfo = ASN1SEQUENCE(
+const SubjectPublicKeyInfo = SEQUENCE(
   {
     algorithm: AlgorithmIdentifier,
     subjectPublicKey: 'BIT STRING',
@@ -256,7 +249,7 @@ const SubjectPublicKeyInfo = ASN1SEQUENCE(
 
 const UniqueIdentifier = 'BIT STRING';
 
-const Extension = ASN1SEQUENCE(
+const Extension = SEQUENCE(
   {
     extnID: 'OBJECT IDENTIFIER',
     critical: 'BOOLEAN',
@@ -265,20 +258,20 @@ const Extension = ASN1SEQUENCE(
   ['extnID', 'critical', 'extnValue']
 );
 
-const Extensions = ASN1SEQUENCEOF(Extension);
+const Extensions = SEQUENCEOF(Extension);
 
-const TBSCertificate = ASN1SEQUENCE(
+const TBSCertificate = SEQUENCE(
   {
-    version: ASN1ExplicitTag(0 as ASN1TagNumber, 'INTEGER'),
+    version: ExplicitTag(0 as TagNumber, 'INTEGER'),
     serialNumber: 'INTEGER',
     signature: AlgorithmIdentifier,
     issuer: Name,
     validity: Validity,
     subject: Name,
     subjectPublicKeyInfo: SubjectPublicKeyInfo,
-    issuerUniqueID: { OPTIONAL: ASN1ImplicitTag(1 as ASN1TagNumber, UniqueIdentifier) },
-    subjectUniqueID: { OPTIONAL: ASN1ImplicitTag(2 as ASN1TagNumber, UniqueIdentifier) },
-    extensions: { OPTIONAL: ASN1ImplicitTag(3 as ASN1TagNumber, Extensions) },
+    issuerUniqueID: { OPTIONAL: ImplicitTag(1 as TagNumber, UniqueIdentifier) },
+    subjectUniqueID: { OPTIONAL: ImplicitTag(2 as TagNumber, UniqueIdentifier) },
+    extensions: { OPTIONAL: ImplicitTag(3 as TagNumber, Extensions) },
   },
   [
     'version',
@@ -294,7 +287,7 @@ const TBSCertificate = ASN1SEQUENCE(
   ]
 );
 
-const Certificate = ASN1SEQUENCE(
+const Certificate = SEQUENCE(
   {
     tbsCertificate: TBSCertificate,
     signatureAlgorithm: AlgorithmIdentifier,
@@ -303,34 +296,34 @@ const Certificate = ASN1SEQUENCE(
   ['tbsCertificate', 'signatureAlgorithm', 'signatureValue']
 );
 const asn1_crt: ASN1Value<typeof Certificate> = {
-  t: Certificate,
-  v: {
+  type: Certificate,
+  value: {
     tbsCertificate: {
-      version: { v: 2n },
+      version: { EXPLICIT: 2n },
       serialNumber: 143266986699090766294700635381230934788665930n,
       signature: { algorithm: [1, 2, 840, 10045, 4, 3, 2] },
       issuer: {
-        v: [
-          new Set([{ type: [2, 5, 4, 6], value: { v: UTF8('US') } }]),
-          new Set([{ type: [2, 5, 4, 10], value: { v: UTF8('Amazon') } }]),
-          new Set([{ type: [2, 5, 4, 3], value: { v: UTF8('Amazon Root CA 3') } }]),
+        CHOICE: [
+          new Set([{ type: [2, 5, 4, 6], value: { ANY: UTF8('US') } }]),
+          new Set([{ type: [2, 5, 4, 10], value: { ANY: UTF8('Amazon') } }]),
+          new Set([{ type: [2, 5, 4, 3], value: { ANY: UTF8('Amazon Root CA 3') } }]),
         ],
       },
       validity: {
-        notBefore: { v: new Date(Date.UTC(2015, 5 - 1, 26)) },
-        notAfter: { v: new Date(Date.UTC(2040, 5 - 1, 26)) },
+        notBefore: { CHOICE: new Date(Date.UTC(2015, 5 - 1, 26)) },
+        notAfter: { CHOICE: new Date(Date.UTC(2040, 5 - 1, 26)) },
       },
       subject: {
-        v: [
-          new Set([{ type: [2, 5, 4, 6], value: { v: UTF8('US') } }]),
-          new Set([{ type: [2, 5, 4, 10], value: { v: UTF8('Amazon') } }]),
-          new Set([{ type: [2, 5, 4, 3], value: { v: UTF8('Amazon Root CA 3') } }]),
+        CHOICE: [
+          new Set([{ type: [2, 5, 4, 6], value: { ANY: UTF8('US') } }]),
+          new Set([{ type: [2, 5, 4, 10], value: { ANY: UTF8('Amazon') } }]),
+          new Set([{ type: [2, 5, 4, 3], value: { ANY: UTF8('Amazon Root CA 3') } }]),
         ],
       },
       subjectPublicKeyInfo: {
         algorithm: {
           algorithm: [1, 2, 840, 10045, 2, 1],
-          parameters: { v: [1, 2, 840, 10045, 3, 1, 7] },
+          parameters: { ANY: [1, 2, 840, 10045, 3, 1, 7] },
         },
         subjectPublicKey: new Uint8Array([
           4, 41, 151, 167, 198, 65, 127, 192, 13, 155, 232, 1, 27, 86, 198, 242, 82, 165, 186, 45,

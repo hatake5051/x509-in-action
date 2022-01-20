@@ -1,16 +1,27 @@
 'use strict';
 
-/**
- * ２つのバイト列を結合する
- * @param {Uint8Array} A - 先頭バイト列
- * @param {Uint8Array} B - 後続バイト列
- * @return {Uint8Array} A の後ろに B をつなげたバイト列 A || B
- */
-function CONCAT(A, B) {
-    const ans = new Uint8Array(A.length + B.length);
-    ans.set(A);
-    ans.set(B, A.length);
+function converRadix(num, radix) {
+    const ans = [];
+    while (num >= radix) {
+        ans.push(num % radix);
+        num = Math.floor(num / radix);
+    }
+    ans.push(num);
+    ans.reverse();
     return ans;
+}
+/**
+ * 複数のバイト列を結合する
+ * @param arrays
+ * @returns arrays を平滑化する
+ */
+function CONCAT(...arrays) {
+    return arrays.reduce((A, B) => {
+        const ans = new Uint8Array(A.length + B.length);
+        ans.set(A);
+        ans.set(B, A.length);
+        return ans;
+    }, new Uint8Array());
 }
 /**
  * 文字列を UTF8 バイトエンコードする。(string to Uint8Array)
@@ -40,123 +51,78 @@ function UTF8_DECODE(OCTETS) {
  */
 const isObject = (value) => typeof value === 'object' && value !== null;
 
-/**
- * @file Abstract Syntax Notation One (ASN.1)
- * 参考文献: http://websites.umich.edu/~x509/ssleay/layman.html
- *
- * ASN.1 は抽象的な types and values を説明するための記法である。
- * type は values の集合であり、ある ASN.1 type の a value はその type が表す集合の要素である。
- * types と values は ASN.1 assignment operator (:==) を使って名づけることができ、他の types 定義にも使える。
- *
- * ASN.1 の表現規則
- * - Comment は pairs of hyphens (--) もしくは a pair of hyphens and a line break で区切る
- * - Identifier (values and fileds の名前) は lower-case letters から始まる
- * - Type references (name of types) は upper-case letters から始まる
- */
-function isASN1Type(arg, t) {
-    if (t == null) {
-        return (isASN1SimpleType(arg) ||
-            isASN1StructuredType(arg) ||
-            isASN1TaggedType(arg) ||
-            isASN1OtherType(arg));
-    }
-    if (isASN1TypeName(t))
-        return isASN1Type(arg) && t === asn1TypeNameFromType(arg);
-    return isASN1Type(arg) && eqASN1Type(t, arg);
+const CHOICE = (s) => ({ CHOICE: s });
+const isOtherType = (arg) => (isObject(arg) &&
+    isObject(arg.ANY) &&
+    (arg.ANY.DEFIEND_BY == null || typeof arg.ANY.DEFIEND_BY === 'string') &&
+    (arg.ANY.typeDerive == null || typeof arg.ANY.typeDerive === 'function')) ||
+    (isObject(arg) &&
+        isObject(arg.CHOICE) &&
+        Object.values(arg.CHOICE).every((t) => isType(t)));
+function checkOtherType(t, n) {
+    if (n == null)
+        return typeof t === 'object' && ('ANY' in t || 'CHOICE' in t);
+    return typeof t === 'object' && n in t;
 }
-function eqASN1Type(l, r) {
+function eqOtherType(l, r) {
     if (l == null && r == null)
         return true;
     if (l == null || r == null)
         return false;
-    if ((isObject(l) && 'ANY' in l) || (isObject(r) && 'ANY' in r))
+    if ('ANY' in l || 'ANY' in r)
         return true;
-    if (isASN1SimpleType(l))
-        return isASN1SimpleType(r) && l === r;
-    if ('IMPLICIT' in l) {
-        return (isObject(r) && 'IMPLICIT' in r && eqASN1Tag(l.IMPLICIT, r.IMPLICIT) && eqASN1Type(l.t, r.t));
-    }
-    if ('EXPLICIT' in l) {
-        return (isObject(r) && 'EXPLICIT' in r && eqASN1Tag(l.EXPLICIT, r.EXPLICIT) && eqASN1Type(l.t, r.t));
-    }
-    if ('SEQUENCE' in l) {
-        return (isObject(r) &&
-            'SEQUENCE' in r &&
-            new Set(l.order).size === new Set(r.order).size &&
-            l.order.every((li) => {
-                const lv = l.SEQUENCE[li];
-                const rv = l.SEQUENCE[li];
-                return (r.order.includes(li) &&
-                    eqASN1Type(isObject(lv) && 'OPTIONAL' in lv ? lv.OPTIONAL : lv, isObject(rv) && 'OPTIONAL' in rv ? rv.OPTIONAL : rv));
-            }));
-    }
-    if ('SEQUENCEOF' in l) {
-        return isObject(r) && 'SEQUENCEOF' in r && eqASN1Type(l.SEQUENCEOF, r.SEQUENCEOF);
-    }
-    if ('SETOF' in l) {
-        return isObject(r) && 'SETOF' in r && eqASN1Type(l.SETOF, r.SETOF);
-    }
     if ('CHOICE' in l) {
-        return (isObject(r) &&
-            'CHOICE' in r &&
-            Object.entries(l.CHOICE).every(([li, lt]) => eqASN1Type(lt, r.CHOICE[li])) &&
-            Object.entries(r.CHOICE).every(([ri, rt]) => eqASN1Type(l.CHOICE[ri], rt)));
+        return ('CHOICE' in r &&
+            Object.entries(l.CHOICE).every(([li, lt]) => eqType(lt, r.CHOICE[li])) &&
+            Object.entries(r.CHOICE).every(([ri, rt]) => eqType(l.CHOICE[ri], rt)));
     }
     return false;
 }
-const isASN1TypeName = (arg) => isASN1SimpleTypeName(arg) ||
-    isASN1StructuredTypeName(arg) ||
-    isASN1TaggedTypeName(arg) ||
-    isASN1OtherTypeName(arg);
-const asn1TypeNameFromType = (t) => {
-    if (isASN1SimpleType(t))
-        return t;
-    if ('SEQUENCE' in t)
-        return 'SEQUENCE';
-    if ('SEQUENCEOF' in t)
-        return 'SEQUENCEOF';
-    if ('SETOF' in t)
-        return 'SETOF';
-    if ('IMPLICIT' in t)
-        return 'IMPLICIT';
-    if ('EXPLICIT' in t)
-        return 'EXPLICIT';
+const isOtherTypeName = (arg) => ['ANY', 'CHOICE'].some((x) => x === arg);
+const OtherNameFromType = (t) => {
     if ('ANY' in t)
         return 'ANY';
     if ('CHOICE' in t)
         return 'CHOICE';
-    throw new TypeError(`${JSON.stringify(t)} は ASN1 Type ではない`);
+    throw new TypeError('Unexpected flow');
 };
-function isASN1Value(arg) {
-    if (!isObject(arg))
-        return false;
-    if (isASN1SimpleType(arg.t))
-        return isASN1SimpleType_to_TSType(arg.v, arg.t);
-    if (isASN1StructuredType(arg.t))
-        return isASN1StructuredType_to_TSType(arg.v, arg.t);
-    if (isASN1TaggedType(arg.t))
-        return isASN1TaggedType_to_TSType(arg.v, arg.t);
-    if (isASN1OtherType(arg.t))
-        return isASN1OtherType_to_TSType(arg.v, arg.t);
+function isOtherValue(arg, t) {
+    if ('CHOICE' in t) {
+        return (isObject(arg) &&
+            Object.values(t.CHOICE).some((t) => isValue(arg.CHOICE, t)));
+    }
+    if ('ANY' in t) {
+        return isObject(arg);
+    }
     return false;
 }
-function checkASN1Value(value, t) {
-    if (isASN1TypeName(t))
-        return t === asn1TypeNameFromType(value.t);
-    return eqASN1Type(t, value.t);
-}
-const ASN1SimpleTypeList = [
+
+const SimpleTypeList = [
+    'BOOLEAN',
     'INTEGER',
     'BIT STRING',
+    'OCTET STRING',
     'NULL',
     'OBJECT IDENTIFIER',
     'UTCTime',
-    'BOOLEAN',
-    'OCTET STRING',
 ];
-const isASN1SimpleType = (arg) => ASN1SimpleTypeList.some((t) => arg === t);
-const isASN1SimpleTypeName = isASN1SimpleType;
-function isASN1SimpleType_to_TSType(arg, t) {
+const isSimpleType = (arg) => SimpleTypeList.some((t) => arg === t);
+const checkSimpleType = (t, n) => {
+    if (n == null)
+        return isSimpleType(t);
+    return t === n;
+};
+const isSimpleTypeName = isSimpleType;
+function isSimpleValue(arg, t) {
+    if (t == null) {
+        return (typeof arg === 'bigint' ||
+            arg instanceof Uint8Array ||
+            arg == null ||
+            (Array.isArray(arg) && arg.every((x) => typeof x === 'number')) ||
+            arg instanceof Date ||
+            typeof arg === 'boolean' ||
+            arg instanceof Uint8Array);
+    }
     switch (t) {
         case 'INTEGER':
             return typeof arg === 'bigint';
@@ -176,68 +142,144 @@ function isASN1SimpleType_to_TSType(arg, t) {
             return false;
     }
 }
-const isASN1StructuredTypeName = (arg) => ['SEQUENCE', 'SEQUENCEOF', 'SETOF'].some((x) => x === arg);
-function isASN1StructuredType(arg) {
+
+const SEQUENCE = (s, order) => ({ SEQUENCE: s, order });
+const SEQUENCEOF = (s) => ({ SEQUENCEOF: s });
+const SETOF = (s) => ({ SETOF: s });
+function isStructuredType(arg) {
     if (isObject(arg) && 'SEQUENCE' in arg) {
         return (Array.isArray(arg.order) &&
             arg.order.every((k) => typeof k === 'string') &&
             isObject(arg.SEQUENCE) &&
             Object.entries(arg.SEQUENCE).every(([k, v]) => arg.order.includes(k) &&
-                ((isObject(v) && 'OPTIONAL' in v && isASN1Type(v.OPTIONAL)) ||
-                    isASN1Type(v))));
+                ((isObject(v) && 'OPTIONAL' in v && isType(v.OPTIONAL)) ||
+                    isType(v))));
     }
     if (isObject(arg) && 'SEQUENCEOF' in arg) {
-        return isASN1Type(arg.SEQUENCEOF);
+        return isType(arg.SEQUENCEOF);
     }
     if (isObject(arg) && 'SETOF' in arg) {
-        return isASN1Type(arg.SETOF);
+        return isType(arg.SETOF);
     }
     return false;
 }
-function isASN1StructuredType_to_TSType(arg, t) {
+function checkStructuredType(t, n) {
+    if (n == null)
+        return typeof t === 'object' && ('SEQUENCE' in t || 'SEQUENCEOF' in t || 'SETOF' in t);
+    return typeof t === 'object' && n in t;
+}
+function eqStructuredType(l, r) {
+    if (l == null && r == null)
+        return true;
+    if (l == null || r == null)
+        return false;
+    if ('SEQUENCE' in l) {
+        return ('SEQUENCE' in r &&
+            new Set(l.order).size === new Set(r.order).size &&
+            l.order.every((li) => {
+                const lv = l.SEQUENCE[li];
+                const rv = l.SEQUENCE[li];
+                return (r.order.includes(li) &&
+                    eqType(isObject(lv) && 'OPTIONAL' in lv ? lv.OPTIONAL : lv, isObject(rv) && 'OPTIONAL' in rv ? rv.OPTIONAL : rv));
+            }));
+    }
+    if ('SEQUENCEOF' in l) {
+        return 'SEQUENCEOF' in r && eqType(l.SEQUENCEOF, r.SEQUENCEOF);
+    }
+    if ('SETOF' in l) {
+        return 'SETOF' in r && eqType(l.SETOF, r.SETOF);
+    }
+    return false;
+}
+const isStructuredTypeName = (arg) => ['SEQUENCE', 'SEQUENCEOF', 'SETOF'].some((x) => x === arg);
+const StructuredNameFromType = (t) => {
+    if ('SEQUENCE' in t)
+        return 'SEQUENCE';
+    if ('SEQUENCEOF' in t)
+        return 'SEQUENCEOF';
+    if ('SETOF' in t)
+        return 'SETOF';
+    throw new TypeError('Unexpected Flow');
+};
+function isStructuredValue(arg, t) {
     if ('SEQUENCE' in t) {
         return (isObject(arg) &&
             Object.entries(arg).every(([k, v]) => {
-                if (!t.order.some((x) => x === k))
+                if (!t.order.includes(k))
                     return false;
-                const tt = t.SEQUENCE[k];
-                if (tt == null)
+                const componentType = t.SEQUENCE[k];
+                if (componentType == null)
                     return false;
-                if (isObject(tt) && 'OPTIONAL' in tt) {
-                    return isASN1Value({ v, t: tt.OPTIONAL });
+                if (isObject(componentType) && 'OPTIONAL' in componentType) {
+                    return isValue(v, componentType.OPTIONAL);
                 }
-                return isASN1Value({ v, t: tt });
+                return isValue(v, componentType);
             }));
     }
     if ('SEQUENCEOF' in t) {
-        return Array.isArray(arg) && arg.every((v) => isASN1Value({ v, t: t.SEQUENCEOF }));
+        return Array.isArray(arg) && arg.every((v) => isValue(v, t.SEQUENCEOF));
     }
     if ('SETOF' in t) {
-        return arg instanceof Set && [...arg].every((v) => isASN1Value({ v, t: t.SETOF }));
+        return arg instanceof Set && [...arg].every((v) => isValue(v, t.SETOF));
     }
     return false;
 }
-const ASN1SEQUENCE = (s, order) => ({
-    SEQUENCE: s,
-    order,
-});
-const ASN1SEQUENCEOF = (s) => ({ SEQUENCEOF: s });
-const ASN1SETOF = (s) => ({ SETOF: s });
-const isASN1TaggedTypeName = (arg) => ['IMPLICIT', 'EXPLICIT'].some((x) => x === arg);
-const isASN1TaggedType = (arg) => (isObject(arg) && isASN1Tag(arg.IMPLICIT) && isASN1Type(arg.t)) ||
-    (isObject(arg) && isASN1Tag(arg.EXPLICIT) && isASN1Type(arg.t));
-function isASN1TaggedType_to_TSType(arg, t) {
-    return isObject(arg) && isASN1Value({ v: arg.v, t: t.t });
+// export function checkStructuredValue<N extends StructuredTypeName>(v: StructuredValue, n?: N): v is StructuredValue<StructuredTypeFromName<N>> {
+//   if (n == null) {
+//     return
+//   }
+// }
+
+const isTag = (arg) => isObject(arg) && isTagClass(arg.c) && isTagNumber(arg.n);
+function eqTag(l, r) {
+    if (l == null && r == null)
+        return true;
+    if (l == null || r == null)
+        return false;
+    return l.c === r.c && l.n === r.n;
 }
+function TagFromType(t) {
+    switch (NameFromType(t)) {
+        case 'BOOLEAN':
+            return { c: 'Universal', n: 1 };
+        case 'INTEGER':
+            return { c: 'Universal', n: 2 };
+        case 'BIT STRING':
+            return { c: 'Universal', n: 3 };
+        case 'OCTET STRING':
+            return { c: 'Universal', n: 4 };
+        case 'NULL':
+            return { c: 'Universal', n: 5 };
+        case 'OBJECT IDENTIFIER':
+            return { c: 'Universal', n: 6 };
+        case 'UTCTime':
+            return { c: 'Universal', n: 23 };
+        case 'EXPLICIT':
+            return t.EXPLICIT;
+        case 'IMPLICIT':
+            return t.IMPLICIT;
+        case 'SEQUENCE':
+        case 'SEQUENCEOF':
+            return { c: 'Universal', n: 16 };
+        case 'SETOF':
+            return { c: 'Universal', n: 17 };
+        default:
+            throw new TypeError(`Type_toTag(${JSON.stringify(t)}) has not been implmented`);
+    }
+}
+const isTagNumber = (arg) => typeof arg === 'number' && arg >= 0;
+const isTagClass = (arg) => TagClassList.some((x) => x === arg);
+const TagClassList = ['Universal', 'Application', 'Context Specific', 'Private'];
+
 /**
  * Implicitly tagged types は基となる type の tag を変更することで他の types から派生する。
  * ASN.1 キーワードで "[class number] IMPLICIT" として表記される。
  * おおよその場合で、 "[class number]" のみの場合は implicitly tagged type の表記。
  */
-const ASN1ImplicitTag = (tag, t) => {
-    if (isASN1TagNumber(tag))
+const ImplicitTag = (tag, t) => {
+    if (isTagNumber(tag))
         return { IMPLICIT: { c: 'Context Specific', n: tag }, t };
-    if (isASN1Tag(tag))
+    if (isTag(tag))
         return { IMPLICIT: tag, t };
     throw new TypeError('不適切な引数です');
 };
@@ -246,470 +288,157 @@ const ASN1ImplicitTag = (tag, t) => {
  * 実質的に、 explicitly tagged types は基となる types を要素に持つ structured types である。
  * ASN.1 キーワードで "[class number] EXPLICIT" として表記される。
  */
-const ASN1ExplicitTag = (tag, t) => {
-    if (isASN1TagNumber(tag))
+const ExplicitTag = (tag, t) => {
+    if (isTagNumber(tag))
         return { EXPLICIT: { c: 'Context Specific', n: tag }, t };
-    if (isASN1Tag(tag))
+    if (isTag(tag))
         return { EXPLICIT: tag, t };
     throw new TypeError('不適切な引数です');
 };
-const isASN1OtherTypeName = (arg) => ['ANY', 'CHOICE'].some((x) => x === arg);
-const isASN1OtherType = (arg) => (isObject(arg) &&
-    isObject(arg.ANY) &&
-    (arg.ANY.DEFIEND_BY == null || typeof arg.ANY.DEFIEND_BY === 'string') &&
-    (arg.ANY.typeDerive == null || typeof arg.ANY.typeDerive === 'function')) ||
-    (isObject(arg) &&
-        typeof arg.CHOICE === 'object' &&
-        arg.CHOICE != null &&
-        Object.values(arg.CHOICE).every((t) => isASN1Type(t)));
-function isASN1OtherType_to_TSType(arg, t) {
-    if ('CHOICE' in t) {
-        return (isObject(arg) &&
-            Object.values(t.CHOICE).some((t) => isASN1Value({ v: arg.v, t })));
-    }
-    if ('ANY' in t) {
-        return isObject(arg);
-    }
-    return false;
-}
-const ASN1CHOICE = (s) => ({ CHOICE: s });
-const isASN1Tag = (arg) => isObject(arg) && isASN1TagClass(arg.c) && isASN1TagNumber(arg.n);
-function eqASN1Tag(l, r) {
+const isTaggedType = (arg) => (isObject(arg) && isTag(arg.IMPLICIT) && isType(arg.t)) ||
+    (isObject(arg) && isTag(arg.EXPLICIT) && isType(arg.t));
+const checkTaggedType = (t, n) => {
+    if (n == null)
+        return typeof t === 'object' && ('IMPLICIT' in t || 'EXPLICIT' in t);
+    return typeof t === 'object' && n in t;
+};
+function eqTaggedType(l, r) {
     if (l == null && r == null)
         return true;
     if (l == null || r == null)
         return false;
-    return l.c === r.c && l.n === r.n;
+    if ('IMPLICIT' in l) {
+        return 'IMPLICIT' in r && eqTag(l.IMPLICIT, r.IMPLICIT) && eqType(l.t, r.t);
+    }
+    if ('EXPLICIT' in l) {
+        return 'EXPLICIT' in r && eqTag(l.EXPLICIT, r.EXPLICIT) && eqType(l.t, r.t);
+    }
+    return false;
 }
-const isASN1TagNumber = (arg) => typeof arg === 'number' && arg >= 0;
-function ASN1Type_to_ASN1Tag(t) {
-    if (t === 'BOOLEAN')
-        return { c: 'Universal', n: 1 };
-    if (t === 'INTEGER')
-        return { c: 'Universal', n: 2 };
-    if (t === 'BIT STRING')
-        return { c: 'Universal', n: 3 };
-    if (t === 'OCTET STRING')
-        return { c: 'Universal', n: 4 };
-    if (t === 'NULL')
-        return { c: 'Universal', n: 5 };
-    if (t === 'OBJECT IDENTIFIER')
-        return { c: 'Universal', n: 6 };
-    if (t === 'UTCTime')
-        return { c: 'Universal', n: 23 };
+const isTaggedTypeName = (arg) => ['IMPLICIT', 'EXPLICIT'].some((x) => x === arg);
+const TaggedNameFromType = (t) => {
     if ('EXPLICIT' in t)
-        return t.EXPLICIT;
+        return 'EXPLICIT';
     if ('IMPLICIT' in t)
-        return t.IMPLICIT;
-    if ('SEQUENCE' in t || 'SEQUENCEOF' in t)
-        return { c: 'Universal', n: 16 };
-    if ('SETOF' in t)
-        return { c: 'Universal', n: 17 };
-    if ('CHOICE' in t || 'ANY' in t)
-        throw new TypeError(`${JSON.stringify(t)} の ASN1Tag は選べない`);
-    throw new TypeError(`ASN1Type_toASN1Tag(${JSON.stringify(t)}) has not been implmented`);
+        return 'IMPLICIT';
+    throw new TypeError('Unexpected flow');
+};
+function isTaggedValue(arg, t) {
+    if ('IMPLICIT' in t) {
+        return isObject(arg) && isValue(arg.IMPLICIT, t.t);
+    }
+    if ('EXPLICIT' in t) {
+        return isObject(arg) && isValue(arg.EXPLICIT, t.t);
+    }
+    return false;
 }
-const isASN1TagClass = (arg) => ASN1TagClassList.some((x) => x === arg);
-const ASN1TagClassList = ['Universal', 'Application', 'Context Specific', 'Private'];
 
-function ASN1Type_to_DERMethod(t) {
-    if (t === 'BOOLEAN' ||
-        t === 'INTEGER' ||
-        t === 'BIT STRING' ||
-        t === 'OCTET STRING' ||
-        t === 'NULL' ||
-        t === 'OBJECT IDENTIFIER' ||
-        t === 'UTCTime')
-        return 'Primitive';
-    if ('EXPLICIT' in t || 'SEQUENCE' in t || 'SEQUENCEOF' in t || 'SETOF' in t)
-        return 'Constructed';
-    if ('IMPLICIT' in t)
-        return ASN1Type_to_DERMethod(t.t);
-    if ('CHOICE' in t || 'ANY' in t)
-        throw new TypeError(`${JSON.stringify(t)} は DER encode できない`);
-    throw new TypeError(`ASN1Type_to_DERMethod(${JSON.stringify(t)}) has not been implmented`);
+const isASN1Value = (arg) => isObject(arg) && isType(arg.type) && isValue(arg.value, arg.type);
+function checkASN1Value(asn1, n) {
+    return checkType(asn1.type, n);
 }
-const DER = {
-    encode: (asn1) => serialize(encodeDER(asn1)),
-    decode: (der, t) => {
-        const x = decodeDER(der, t);
-        // 乱暴な型キャスト
-        return x.asn1;
-    },
+const isType = (arg) => isSimpleType(arg) || isStructuredType(arg) || isTaggedType(arg) || isOtherType(arg);
+function checkType(t, n) {
+    if (n == null)
+        return checkSimpleType(t) || checkStructuredType(t) || checkTaggedType(t) || checkOtherType(t);
+    if (isSimpleTypeName(n))
+        return checkSimpleType(t, n);
+    if (isStructuredTypeName(n))
+        return checkStructuredType(t, n);
+    if (isTaggedTypeName(n))
+        return checkTaggedType(t, n);
+    if (isOtherTypeName(n))
+        return checkOtherType(t, n);
+    return false;
+}
+function eqType(l, r) {
+    if (l == null && r == null)
+        return true;
+    if (l == null || r == null)
+        return false;
+    if (checkOtherType(l, 'ANY') || checkOtherType(r, 'ANY'))
+        return true;
+    if (checkSimpleType(l))
+        return checkSimpleType(r) && l === r;
+    if (checkTaggedType(l))
+        return checkTaggedType(r) && eqTaggedType(l, r);
+    if (checkStructuredType(l))
+        return checkStructuredType(r) && eqStructuredType(l, r);
+    if (checkOtherType(l, 'CHOICE'))
+        return checkOtherType(r, 'CHOICE') && eqOtherType(l, r);
+    return false;
+}
+const NameFromType = (t) => {
+    if (checkSimpleType(t))
+        return t;
+    if (checkStructuredType(t))
+        return StructuredNameFromType(t);
+    if (checkTaggedType(t))
+        return TaggedNameFromType(t);
+    if (checkOtherType(t))
+        return OtherNameFromType(t);
+    throw new TypeError(`${JSON.stringify(t)} は ASN1 Type ではない`);
 };
-const serialize = (x) => CONCAT(CONCAT(x.id, x.len), x.contents);
-function encodeDER(asn1, parentSEQUENCE) {
-    if (checkASN1Value(asn1, 'CHOICE')) {
-        for (const t of Object.values(asn1.t.CHOICE)) {
-            const inner = { v: asn1.v.v, t };
-            if (!isASN1Value(inner)) {
-                continue;
-            }
-            return encodeDER(inner);
-        }
-        throw new TypeError(`asn1 value が CHOICE を満たせていない`);
-    }
-    if (checkASN1Value(asn1, 'ANY')) {
-        const derive = asn1.v.typeDerive ?? asn1.t.ANY.typeDerive;
-        if (derive == null)
-            throw new TypeError('ANY の actual type を判断できません');
-        const t = derive(asn1.t.ANY.DEFIEND_BY == null || parentSEQUENCE == null
-            ? undefined
-            : parentSEQUENCE[asn1.t.ANY.DEFIEND_BY]);
-        return encodeDER({ v: asn1.v.v, t });
-    }
-    const id = DERIdentifierOctets.encode(ASN1Type_to_ASN1Tag(asn1.t), ASN1Type_to_DERMethod(asn1.t));
-    const ans = (contents) => ({
-        id,
-        len: DERLengthOctets.encode(contents.length),
-        contents,
-    });
-    if (checkASN1Value(asn1, 'BOOLEAN')) {
-        const contents = DERContentsOctets_BOOLEAN.encode(asn1.v);
-        return ans(contents);
-    }
-    if (checkASN1Value(asn1, 'INTEGER')) {
-        const contents = DERContentsOctets_INTEGER.encode(asn1.v);
-        return ans(contents);
-    }
-    if (checkASN1Value(asn1, 'BIT STRING')) {
-        const contents = DERContentsOctets_BIT_STRING.encode(asn1.v);
-        return ans(contents);
-    }
-    if (checkASN1Value(asn1, 'OCTET STRING')) {
-        const contents = DERContentsOctets_OCTET_STRING.encode(asn1.v);
-        return ans(contents);
-    }
-    if (checkASN1Value(asn1, 'NULL')) {
-        const contents = DERContentsOctets_NULL.encode(asn1.v);
-        return ans(contents);
-    }
-    if (checkASN1Value(asn1, 'OBJECT IDENTIFIER')) {
-        const contents = DERContentsOctets_OBJECT_IDENTIFIER.encode(asn1.v);
-        return ans(contents);
-    }
-    if (checkASN1Value(asn1, 'UTCTime')) {
-        const contents = DERContentsOctets_UTCTIME.encode(asn1.v);
-        return ans(contents);
-    }
-    if (checkASN1Value(asn1, 'IMPLICIT')) {
-        const der = encodeDER({ v: asn1.v.v, t: asn1.t.t });
-        return { id, len: der.len, contents: der.contents };
-    }
-    if (checkASN1Value(asn1, 'EXPLICIT')) {
-        const component = encodeDER({ v: asn1.v.v, t: asn1.t.t });
-        const contents = serialize(component);
-        return ans(contents);
-    }
-    if (checkASN1Value(asn1, 'SEQUENCE')) {
-        const contents = asn1.t.order.reduce((prev, id) => {
-            let t = asn1.t.SEQUENCE[id];
-            if (t == null)
-                throw new TypeError(`Unexpected null`);
-            if (isObject(t) && 'OPTIONAL' in t) {
-                if (asn1.v[id] == null) {
-                    return prev;
-                }
-                t = t.OPTIONAL;
-            }
-            const component = encodeDER({ v: asn1.v[id], t }, asn1.v);
-            return CONCAT(prev, serialize(component));
-        }, new Uint8Array());
-        return ans(contents);
-    }
-    if (checkASN1Value(asn1, 'SEQUENCEOF')) {
-        const contents = asn1.v.reduce((prev, v) => {
-            const component = encodeDER({ t: asn1.t.SEQUENCEOF, v });
-            return CONCAT(prev, serialize(component));
-        }, new Uint8Array());
-        return ans(contents);
-    }
-    if (checkASN1Value(asn1, 'SETOF')) {
-        const cmp = (l, r) => {
-            for (let i = 0; i < l.length; i++) {
-                const li = l[i];
-                if (li == null)
-                    break;
-                const ri = r[i];
-                if (ri == null)
-                    return 'gt';
-                if (li > ri)
-                    return 'gt';
-                if (li < ri)
-                    return 'lt';
-            }
-            return 'eq';
-        };
-        const components = [];
-        asn1.v.forEach((v) => {
-            const component = serialize(encodeDER({ t: asn1.t.SETOF, v }));
-            let i = 0;
-            for (; i < components.length; i++) {
-                const ci = components[i];
-                if (ci == null || cmp(component, ci) === 'lt') {
-                    break;
-                }
-            }
-            components.splice(i, 0, component);
-        });
-        const contents = components.reduce((prev, c) => CONCAT(prev, c), new Uint8Array());
-        return ans(contents);
-    }
-    throw new TypeError('not implemented');
+function isValue(arg, t) {
+    if (checkSimpleType(t))
+        return isSimpleValue(arg, t);
+    if (checkStructuredType(t))
+        return isStructuredValue(arg, t);
+    if (checkTaggedType(t))
+        return isTaggedValue(arg, t);
+    if (checkOtherType(t))
+        return isOtherValue(arg, t);
+    return false;
 }
-function decodeDER(der, t, parentSEQUENCE) {
-    if (isASN1Type(t, 'CHOICE')) {
-        for (const innerType of Object.values(t.CHOICE)) {
-            try {
-                const { asn1: inner, entireLen } = decodeDER(der, innerType);
-                return {
-                    asn1: { t, v: { v: inner.v } },
-                    entireLen,
-                };
-            }
-            catch (e) {
-                continue;
-            }
+
+const DERContentsOctets = {
+    encode: (asn1) => {
+        if (checkASN1Value(asn1, 'BOOLEAN')) {
+            return DERContentsOctets_BOOLEAN.encode(asn1.value);
         }
-        throw new TypeError(`パースエラー。 CHOICE のいずれの型を用いても解析できない`);
-    }
-    if (isASN1Type(t, 'ANY')) {
-        if (t.ANY.typeDerive == null)
-            throw new TypeError('ANY の actual Type を決定できない');
-        const actualType = t.ANY.typeDerive(parentSEQUENCE == null || t.ANY.DEFIEND_BY == null
-            ? undefined
-            : parentSEQUENCE[t.ANY.DEFIEND_BY]);
-        return decodeDER(der, actualType);
-    }
-    const { tag, method, entireLen: leni } = DERIdentifierOctets.decode(der);
-    if (!eqASN1Tag(ASN1Type_to_ASN1Tag(t), tag)) {
-        throw new TypeError(`パースエラー。 ${JSON.stringify(t)} としてバイナリを解析できない`);
-    }
-    const der_len = der.slice(leni);
-    const { contentsLength, entireLen: lenl } = DERLengthOctets.decode(der_len);
-    const entireLen = leni + lenl + contentsLength;
-    const der_contents = der.slice(leni + lenl, entireLen);
-    if (isASN1Type(t, 'BOOLEAN')) {
-        const v = DERContentsOctets_BOOLEAN.decode(der_contents);
-        const asn1 = { t, v };
-        return { asn1, entireLen };
-    }
-    if (isASN1Type(t, 'INTEGER')) {
-        const v = DERContentsOctets_INTEGER.decode(der_contents);
-        const asn1 = { t, v };
-        return { asn1, entireLen };
-    }
-    if (isASN1Type(t, 'BIT STRING')) {
-        const v = DERContentsOctets_BIT_STRING.decode(der_contents);
-        const asn1 = { t, v };
-        return { asn1, entireLen };
-    }
-    if (isASN1Type(t, 'OCTET STRING')) {
-        const v = DERContentsOctets_OCTET_STRING.decode(der_contents);
-        const asn1 = { t, v };
-        return { asn1, entireLen };
-    }
-    if (isASN1Type(t, 'NULL')) {
-        const v = DERContentsOctets_NULL.decode(der_contents);
-        const asn1 = { t, v };
-        return { asn1, entireLen };
-    }
-    if (isASN1Type(t, 'OBJECT IDENTIFIER')) {
-        const v = DERContentsOctets_OBJECT_IDENTIFIER.decode(der_contents);
-        const asn1 = { t, v };
-        return { asn1, entireLen };
-    }
-    if (isASN1Type(t, 'UTCTime')) {
-        const v = DERContentsOctets_UTCTIME.decode(der_contents);
-        const asn1 = { t, v };
-        return { asn1, entireLen };
-    }
-    if (isASN1Type(t, 'IMPLICIT')) {
-        const identifierOctets = DERIdentifierOctets.encode(ASN1Type_to_ASN1Tag(t.t), method);
-        const { asn1: component } = decodeDER(CONCAT(identifierOctets, der_len), t.t);
-        const asn1 = { t, v: { v: component.v } };
-        return { asn1, entireLen };
-    }
-    if (isASN1Type(t, 'EXPLICIT')) {
-        const { asn1: component } = decodeDER(der_contents, t.t);
-        const asn1 = { t, v: { v: component.v } };
-        return { asn1, entireLen };
-    }
-    if (isASN1Type(t, 'SEQUENCE')) {
-        let v = {};
-        let start = 0;
-        for (const id of t.order) {
-            if (der_contents.length <= start) {
-                break;
-            }
-            let tt = t.SEQUENCE[id];
-            if (tt == null)
-                throw new TypeError(`Unexpected null`);
-            if (isObject(tt) && 'OPTIONAL' in tt) {
-                if (!isASN1Type(tt.OPTIONAL, 'ANY')) {
-                    const { tag: ttag } = DERIdentifierOctets.decode(der_contents.slice(start));
-                    if (!eqASN1Tag(ASN1Type_to_ASN1Tag(tt.OPTIONAL), ttag)) {
-                        continue;
-                    }
-                }
-                tt = tt.OPTIONAL;
-            }
-            try {
-                const { asn1: component, entireLen: tlen } = decodeDER(der_contents.slice(start), tt, v);
-                v = { ...v, [id]: component.v };
-                start += tlen;
-            }
-            catch (e) {
-                if (isASN1Type(tt, 'ANY'))
-                    continue;
-                throw e;
-            }
+        if (checkASN1Value(asn1, 'INTEGER')) {
+            return DERContentsOctets_INTEGER.encode(asn1.value);
         }
-        const asn1 = { v, t };
-        if (!isASN1Value(asn1)) {
-            throw new TypeError('SEQUENCE のデコードに失敗');
+        if (checkASN1Value(asn1, 'BIT STRING')) {
+            return DERContentsOctets_BIT_STRING.encode(asn1.value);
         }
-        return { asn1, entireLen };
-    }
-    if (isASN1Type(t, 'SEQUENCEOF')) {
-        const v = [];
-        for (let start = 0; start < contentsLength;) {
-            const { asn1: component, entireLen: tlen } = decodeDER(der_contents.slice(start), t.SEQUENCEOF);
-            v.push(component.v);
-            start += tlen;
+        if (checkASN1Value(asn1, 'OCTET STRING')) {
+            return DERContentsOctets_OCTET_STRING.encode(asn1.value);
         }
-        const asn1 = { v, t };
-        if (!isASN1Value(asn1)) {
-            throw new TypeError('SEQUENCEOF のデコードに失敗');
+        if (checkASN1Value(asn1, 'NULL')) {
+            return DERContentsOctets_NULL.encode(asn1.value);
         }
-        return { asn1, entireLen };
-    }
-    if (isASN1Type(t, 'SETOF')) {
-        const v = new Set();
-        for (let start = 0; start < contentsLength;) {
-            const { asn1: component, entireLen: tlen } = decodeDER(der_contents.slice(start), t.SETOF);
-            v.add(component.v);
-            start += tlen;
+        if (checkASN1Value(asn1, 'OBJECT IDENTIFIER')) {
+            return DERContentsOctets_OBJECT_IDENTIFIER.encode(asn1.value);
         }
-        const asn1 = { v, t };
-        if (!isASN1Value(asn1)) {
-            throw new TypeError('SETOF のデコードに失敗');
+        if (checkASN1Value(asn1, 'UTCTime')) {
+            return DERContentsOctets_UTCTIME.encode(asn1.value);
         }
-        return { asn1, entireLen };
-    }
-    throw new TypeError(`decodeDER(asn1type: ${JSON.stringify(t)}) has been not implemented`);
-}
-function converRadix(num, radix) {
-    const ans = [];
-    while (num >= radix) {
-        ans.push(num % radix);
-        num = Math.floor(num / radix);
-    }
-    ans.push(num);
-    ans.reverse();
-    return ans;
-}
-const DERIdentifierOctets = {
-    encode: (tag, method) => {
-        let bits8_7;
-        switch (tag.c) {
-            case 'Universal':
-                bits8_7 = 0b00;
-                break;
-            case 'Application':
-                bits8_7 = 0b01;
-                break;
-            case 'Context Specific':
-                bits8_7 = 0b10;
-                break;
-            case 'Private':
-                bits8_7 = 0b11;
-                break;
-        }
-        const bit6 = method === 'Primitive' ? 0b0 : 0b1;
-        if (tag.n < 0x1f) {
-            const bits5_1 = tag.n;
-            const first_octet = (bits8_7 << 6) + (bit6 << 5) + bits5_1;
-            return new Uint8Array([first_octet]);
-        }
-        const first_octet = (bits8_7 << 6) + (bit6 << 5) + 0x1f;
-        const numlistBasedOnRasix = converRadix(tag.n, 128);
-        return new Uint8Array([first_octet, ...numlistBasedOnRasix]);
+        throw new TypeError(`${asn1} のエンコードには対応していない`);
     },
-    decode: (octets) => {
-        if (octets[0] == null)
-            throw new TypeError('正しい DER Identifier Octets を与えてください。');
-        let c;
-        const bits8_7 = (octets[0] & 0xc0) >> 6;
-        switch (bits8_7) {
-            case 0x0:
-                c = 'Universal';
-                break;
-            case 0x1:
-                c = 'Application';
-                break;
-            case 0x2:
-                c = 'Context Specific';
-                break;
-            case 0x3:
-                c = 'Private';
-                break;
-            default:
-                throw new TypeError('DER Identifier Octets の tag class encoding は 00 ~ 11 の範囲のみ');
+    decode: (octets, t) => {
+        if (checkType(t, 'BOOLEAN')) {
+            return { type: t, value: DERContentsOctets_BOOLEAN.decode(octets) };
         }
-        const bit6 = (octets[0] & 0x20) >> 5;
-        const method = bit6 === 0 ? 'Primitive' : 'Constructed';
-        const bits5_1 = octets[0] & 0x1f;
-        if (bits5_1 < 0x1f) {
-            return { tag: { c, n: bits5_1 }, method, entireLen: 1 };
+        if (checkType(t, 'INTEGER')) {
+            return { type: t, value: DERContentsOctets_INTEGER.decode(octets) };
         }
-        let last = 0;
-        let num = 0;
-        for (let idx = 1; idx < octets.length; idx++) {
-            last++;
-            const oct = octets[idx];
-            if (oct == null)
-                throw new TypeError('DER Identifier Octets の tag number encoding で high-tag-number format error');
-            num = (num << 7) + (oct & 0x7f);
-            if ((oct & 0x80) >> 7 === 0) {
-                break;
-            }
+        if (checkType(t, 'BIT STRING')) {
+            return { type: t, value: DERContentsOctets_BIT_STRING.decode(octets) };
         }
-        return { tag: { c, n: num }, method, entireLen: last + 1 };
-    },
-};
-const DERLengthOctets = {
-    encode: (contentsOctetLength) => {
-        if (contentsOctetLength < 128) {
-            return new Uint8Array([contentsOctetLength]);
+        if (checkType(t, 'OCTET STRING')) {
+            return { type: t, value: DERContentsOctets_OCTET_STRING.decode(octets) };
         }
-        let len = contentsOctetLength;
-        const lenList = [];
-        const radix = 256;
-        while (len >= radix) {
-            lenList.push(len % radix);
-            len = Math.floor(len / radix);
+        if (checkType(t, 'NULL')) {
+            return { type: t, value: DERContentsOctets_NULL.decode(octets) };
         }
-        lenList.push(len);
-        const lenListLength = lenList.length;
-        const first_octet = (1 << 7) + lenListLength;
-        return new Uint8Array([first_octet, ...lenList.reverse()]);
-    },
-    decode: (octets) => {
-        if (octets[0] == null)
-            throw new TypeError('正しい DER Length Octets を与えてください。');
-        if (octets[0] < 128) {
-            return { contentsLength: octets[0], entireLen: 1 };
+        if (checkType(t, 'OBJECT IDENTIFIER')) {
+            return { type: t, value: DERContentsOctets_OBJECT_IDENTIFIER.decode(octets) };
         }
-        const lenOctetsLength = octets[0] & 0x7f;
-        let len = 0;
-        for (let idx = 0; idx < lenOctetsLength; idx++) {
-            const oct = octets[idx + 1];
-            if (oct == null)
-                throw new TypeError('DER Length Octets の encoding で long format error');
-            len = (len << 8) + oct;
+        if (checkType(t, 'UTCTime')) {
+            return { type: t, value: DERContentsOctets_UTCTIME.decode(octets) };
         }
-        return { contentsLength: len, entireLen: lenOctetsLength + 1 };
+        throw new TypeError(`${t} のエンコードに対応していない`);
     },
 };
 const DERContentsOctets_BOOLEAN = {
@@ -895,6 +624,424 @@ const DERContentsOctets_UTCTIME = {
     },
 };
 
+const DERIdentifierOctets = {
+    encode: encode$2,
+    decode: decode$2,
+};
+function encode$2(tag, method) {
+    let bits8_7;
+    switch (tag.c) {
+        case 'Universal':
+            bits8_7 = 0b00;
+            break;
+        case 'Application':
+            bits8_7 = 0b01;
+            break;
+        case 'Context Specific':
+            bits8_7 = 0b10;
+            break;
+        case 'Private':
+            bits8_7 = 0b11;
+            break;
+    }
+    const bit6 = method === 'Primitive' ? 0b0 : 0b1;
+    if (tag.n < 0x1f) {
+        const bits5_1 = tag.n;
+        const first_octet = (bits8_7 << 6) + (bit6 << 5) + bits5_1;
+        return new Uint8Array([first_octet]);
+    }
+    const first_octet = (bits8_7 << 6) + (bit6 << 5) + 0x1f;
+    const numlistBasedOnRasix = converRadix(tag.n, 128);
+    return new Uint8Array([first_octet, ...numlistBasedOnRasix]);
+}
+function decode$2(octets) {
+    if (octets[0] == null)
+        throw new TypeError('与えられた IdentifierOctets は 0byte目すらない');
+    let c;
+    const bits8_7 = (octets[0] & 0xc0) >> 6;
+    switch (bits8_7) {
+        case 0x0:
+            c = 'Universal';
+            break;
+        case 0x1:
+            c = 'Application';
+            break;
+        case 0x2:
+            c = 'Context Specific';
+            break;
+        case 0x3:
+            c = 'Private';
+            break;
+        default:
+            throw new TypeError('DER Identifier Octets の tag class encoding は 00 ~ 11 の範囲のみ');
+    }
+    const bit6 = (octets[0] & 0x20) >> 5;
+    const method = bit6 === 0 ? 'Primitive' : 'Constructed';
+    const bits5_1 = octets[0] & 0x1f;
+    if (bits5_1 < 0x1f) {
+        return { tag: { c, n: bits5_1 }, method, entireLen: 1 };
+    }
+    let last = 0;
+    let num = 0;
+    for (let idx = 1; idx < octets.length; idx++) {
+        last++;
+        const oct = octets[idx];
+        if (oct == null)
+            throw new TypeError('DER Identifier Octets の tag number encoding で high-tag-number format error');
+        num = (num << 7) + (oct & 0x7f);
+        if ((oct & 0x80) >> 7 === 0) {
+            break;
+        }
+    }
+    return { tag: { c, n: num }, method, entireLen: last + 1 };
+}
+
+const DERLengthOctets = {
+    encode: encode$1,
+    decode: decode$1,
+};
+function encode$1(contentsOctetLength) {
+    if (contentsOctetLength < 128) {
+        return new Uint8Array([contentsOctetLength]);
+    }
+    let len = contentsOctetLength;
+    const lenList = [];
+    const radix = 256;
+    while (len >= radix) {
+        lenList.push(len % radix);
+        len = Math.floor(len / radix);
+    }
+    lenList.push(len);
+    const lenListLength = lenList.length;
+    const first_octet = (1 << 7) + lenListLength;
+    return new Uint8Array([first_octet, ...lenList.reverse()]);
+}
+function decode$1(octets) {
+    if (octets[0] == null)
+        throw new TypeError('正しい DER Length Octets を与えてください。');
+    if (octets[0] < 128) {
+        return { contentsLength: octets[0], entireLen: 1 };
+    }
+    const lenOctetsLength = octets[0] & 0x7f;
+    let len = 0;
+    for (let idx = 0; idx < lenOctetsLength; idx++) {
+        const oct = octets[idx + 1];
+        if (oct == null)
+            throw new TypeError('DER Length Octets の encoding で long format error');
+        len = (len << 8) + oct;
+    }
+    return { contentsLength: len, entireLen: lenOctetsLength + 1 };
+}
+
+function decode(der, t, ctx) {
+    if (checkType(t, 'ANY')) {
+        if (t.ANY.typeDerive == null)
+            throw new TypeError('ANY の actual Type を決定できない');
+        const actualType = t.ANY.typeDerive(ctx?.parentSEQUENCE == null || t.ANY.DEFIEND_BY == null
+            ? undefined
+            : ctx.parentSEQUENCE[t.ANY.DEFIEND_BY]);
+        return decode(der, actualType);
+    }
+    if (checkType(t, 'CHOICE')) {
+        for (const innerType of Object.values(t.CHOICE)) {
+            try {
+                const { asn1: inner, entireLen } = decode(der, innerType, ctx);
+                return {
+                    asn1: { type: t, value: { CHOICE: inner.value } },
+                    entireLen,
+                };
+            }
+            catch (e) {
+                continue;
+            }
+        }
+        throw new TypeError(`パースエラー。 CHOICE のいずれの型を用いても解析できない`);
+    }
+    const { tag, method, entireLen: leni } = DERIdentifierOctets.decode(der);
+    if (!eqTag(TagFromType(t), tag)) {
+        throw new TypeError(`パースエラー。expected: tag of ${JSON.stringify(t)}, but actual: ${tag} `);
+    }
+    const der_len = der.slice(leni);
+    const { contentsLength, entireLen: lenl } = DERLengthOctets.decode(der_len);
+    const entireLen = leni + lenl + contentsLength;
+    const der_contents = der.slice(leni + lenl, entireLen);
+    if (checkType(t, 'IMPLICIT')) {
+        const identifierOctets = DERIdentifierOctets.encode(TagFromType(t.t), method);
+        const { asn1: component } = decode(CONCAT(identifierOctets, der_len), t.t, ctx);
+        const asn1 = { type: t, value: { IMPLICIT: component.value } };
+        return { asn1, entireLen };
+    }
+    if (checkType(t, 'EXPLICIT')) {
+        const { asn1: component } = decode(der_contents, t.t, ctx);
+        const asn1 = { type: t, value: { EXPLICIT: component.value } };
+        return { asn1, entireLen };
+    }
+    if (checkType(t, 'SEQUENCE')) {
+        let value = {};
+        let start = 0;
+        for (const id of t.order) {
+            if (der_contents.length <= start) {
+                break;
+            }
+            let tt = t.SEQUENCE[id];
+            if (tt == null)
+                throw new TypeError(`Unexpected null`);
+            if (typeof tt === 'object' && 'OPTIONAL' in tt) {
+                if (!checkType(tt.OPTIONAL, 'ANY')) {
+                    const { tag: ttag } = DERIdentifierOctets.decode(der_contents.slice(start));
+                    if (!eqTag(TagFromType(tt.OPTIONAL), ttag)) {
+                        continue;
+                    }
+                }
+                tt = tt.OPTIONAL;
+            }
+            try {
+                const { asn1: component, entireLen: tlen } = decode(der_contents.slice(start), tt, {
+                    parentSEQUENCE: value,
+                });
+                value = { ...value, [id]: component.value };
+                start += tlen;
+            }
+            catch (e) {
+                if (checkType(tt, 'ANY'))
+                    continue;
+                throw e;
+            }
+        }
+        const asn1 = { type: t, value };
+        return { asn1, entireLen };
+    }
+    if (checkType(t, 'SEQUENCEOF')) {
+        const value = [];
+        for (let start = 0; start < contentsLength;) {
+            const { asn1: component, entireLen: tlen } = decode(der_contents.slice(start), t.SEQUENCEOF);
+            value.push(component.value);
+            start += tlen;
+        }
+        const asn1 = { type: t, value };
+        return { asn1, entireLen };
+    }
+    if (checkType(t, 'SETOF')) {
+        const value = new Set();
+        for (let start = 0; start < contentsLength;) {
+            const { asn1: component, entireLen: tlen } = decode(der_contents.slice(start), t.SETOF);
+            value.add(component.value);
+            start += tlen;
+        }
+        const asn1 = { type: t, value };
+        return { asn1, entireLen };
+    }
+    try {
+        const asn1 = DERContentsOctets.decode(der_contents, t);
+        return { asn1, entireLen };
+    }
+    catch (e) {
+        throw new TypeError(`${t} のデコードには対応していない`);
+    }
+    throw new TypeError(`decodeDER(asn1type: ${JSON.stringify(t)}) has been not implemented`);
+}
+
+function DERMethodFromType(t) {
+    if (t === 'BOOLEAN' ||
+        t === 'INTEGER' ||
+        t === 'BIT STRING' ||
+        t === 'OCTET STRING' ||
+        t === 'NULL' ||
+        t === 'OBJECT IDENTIFIER' ||
+        t === 'UTCTime')
+        return 'Primitive';
+    if ('EXPLICIT' in t || 'SEQUENCE' in t || 'SEQUENCEOF' in t || 'SETOF' in t)
+        return 'Constructed';
+    if ('IMPLICIT' in t)
+        return DERMethodFromType(t.t);
+    throw new TypeError(`DERMethodFromType(${JSON.stringify(t)}) に失敗`);
+}
+
+function encode(asn1, ctx) {
+    if (checkASN1Value(asn1, 'ANY')) {
+        const derive = asn1.type.ANY.typeDerive;
+        if (derive == null)
+            throw new TypeError('ANY の actual type を判断できません');
+        const t = derive(asn1.type.ANY.DEFIEND_BY == null || ctx?.parentSEQUENCE == null
+            ? undefined
+            : ctx.parentSEQUENCE[asn1.type.ANY.DEFIEND_BY]);
+        const actual = { type: t, value: asn1.value.ANY };
+        if (!isASN1Value(actual))
+            throw new TypeError('判断した actual type の actual value が一致しない');
+        return encode(actual);
+    }
+    if (checkASN1Value(asn1, 'CHOICE')) {
+        for (const t of Object.values(asn1.type.CHOICE)) {
+            const actual = { type: t, value: asn1.value.CHOICE };
+            if (!isASN1Value(actual)) {
+                continue;
+            }
+            return encode(actual, ctx);
+        }
+        throw new TypeError('CHOICE のいずれの type も actual value と一致しなかった');
+    }
+    const id = DERIdentifierOctets.encode(TagFromType(asn1.type), DERMethodFromType(asn1.type));
+    const ans = (contents) => ({
+        id,
+        len: DERLengthOctets.encode(contents.length),
+        contents,
+    });
+    if (checkASN1Value(asn1, 'IMPLICIT')) {
+        const inner = { type: asn1.type.t, value: asn1.value.IMPLICIT };
+        if (!isASN1Value(inner))
+            throw new TypeError('タグづけされた内部の value と type が一致しない');
+        const der = encode(inner);
+        return { id, len: der.len, contents: der.contents };
+    }
+    if (checkASN1Value(asn1, 'EXPLICIT')) {
+        const inner = { type: asn1.type.t, value: asn1.value.EXPLICIT };
+        if (!isASN1Value(inner))
+            throw new TypeError('タグづけされた内部の value と type が一致しない');
+        const der = serialize(encode(inner));
+        return ans(der);
+    }
+    if (checkASN1Value(asn1, 'SEQUENCE')) {
+        const contents = asn1.type.order.reduce((prev, id) => {
+            let componentType = asn1.type.SEQUENCE[id];
+            if (componentType == null)
+                throw new TypeError(`Unexpected null`);
+            if (typeof componentType === 'object' && 'OPTIONAL' in componentType) {
+                if (asn1.value[id] == null) {
+                    return prev;
+                }
+                componentType = componentType.OPTIONAL;
+            }
+            const component = { type: componentType, value: asn1.value[id] };
+            if (!isASN1Value(component))
+                throw new TypeError('SEQUENCE 内部の value と type が一致しない');
+            const componentDER = serialize(encode(component, { parentSEQUENCE: asn1.value }));
+            return CONCAT(prev, componentDER);
+        }, new Uint8Array());
+        return ans(contents);
+    }
+    if (checkASN1Value(asn1, 'SEQUENCEOF')) {
+        const contents = asn1.value.reduce((prev, value) => {
+            const component = { type: asn1.type.SEQUENCEOF, value };
+            if (!isASN1Value(component))
+                throw new TypeError('SEQUENCEOF 内部の value と type が一致しない');
+            const componentDER = serialize(encode(component));
+            return CONCAT(prev, componentDER);
+        }, new Uint8Array());
+        return ans(contents);
+    }
+    if (checkASN1Value(asn1, 'SETOF')) {
+        const cmp = (l, r) => {
+            for (let i = 0; i < l.length; i++) {
+                const li = l[i];
+                if (li == null)
+                    break;
+                const ri = r[i];
+                if (ri == null)
+                    return 'gt';
+                if (li > ri)
+                    return 'gt';
+                if (li < ri)
+                    return 'lt';
+            }
+            return 'eq';
+        };
+        const components = [];
+        asn1.value.forEach((value) => {
+            const component = { type: asn1.type.SETOF, value };
+            if (!isASN1Value(component))
+                throw new TypeError('SETOF 内部の value と type が一致しない');
+            const componentDER = serialize(encode(component));
+            let i = 0;
+            for (; i < components.length; i++) {
+                const ci = components[i];
+                if (ci == null || cmp(componentDER, ci) === 'lt') {
+                    break;
+                }
+            }
+            components.splice(i, 0, componentDER);
+        });
+        return ans(CONCAT(...components));
+    }
+    try {
+        return ans(DERContentsOctets.encode(asn1));
+    }
+    catch (e) {
+        throw new TypeError(`${asn1} のエンコードには対応していない`);
+    }
+}
+function serialize(x) {
+    return CONCAT(x.id, x.len, x.contents);
+}
+
+/**
+ * @file
+ * Distinguished Encoding Rules for ASN.1 (DER) は BER のサブセットで、
+ * オクテット文字列として任意の ASN.1 value を一意に表現する方法を与える。
+ * BER に次の制約を課す
+ * - length が 0~127 なら short form を使う
+ * - length が 128~ なら long form で最小オクテット数で表現
+ * - simple string types とそれに派生する implicitly tagged types では the primitive, definite-length method
+ * - structured types とそれに派生する tagged type は constructed では constructed, definite-length method
+ * - あとは type ごとにいくつか
+ *
+ * Basic Encoding Rules for ASN.1 (BER) はオクテット文字列として任意の ASN.1 values を表現する方法を与える。
+ * BER では ASN.1 values をエンコードするために３つの methods があり、 どれを選ぶかは value の型と、
+ * value の長さが既知かどうかによって決まる。
+ * - primitive, definite-length encoding
+ * - constructed, definite-length encoding
+ * - constructed, indefinite-length encoding
+ *
+ * BER encoding は3,4 つのパートを持つ
+ * - Identifier octets: その ASN.1 value の the class and tag number を識別し、
+ * そのメソッドが primitive か constructed かどうか示す
+ * - Length octets: definite-length method ならコンテンツのオクテット長を表現し、
+ * infinite-length method では length が idefinite であることを示す
+ * - Contents octets: primiteve method では the value の具体的な表現を与え、
+ * constructed method では the value の要素の BER encoding を連結したものを与える
+ * - End-of-contents octets: indefinite-length method ではコンテンツの終わりを表し、
+ * それ以外では使わない
+ *
+ * Primitive, difinite-length method
+ * - simple types と implicit tagging で simple types から派生した types に適用する
+ * - the value の長さが既知であることが必要
+ * - Identifier octets: ２つの形式がある
+ *   - low tag number (0 ~ 30) form
+ *     - 1 octet で表現。 bit 8 と 7 で class を表現し、 bit 6 が "0" で primitive encoding であることを表す。
+ *     - class の表現 00: universal, 01: application, 10: context-specific, 11: primitive
+ *     - bits 5-1 で tag number を表現
+ *   - high tag number (31 ~ ) form
+ *     - ２つ以上の octets で表現。 1st octet は low-tag-number と同じ感じだけど、bits 5-1 が "11111" 。
+ *     - 後続の octets で tag number を表現、 128 進数で。可能な限り少ない桁で
+ * - Length octets: ２つの形式がある
+ *   - short (0~127 の長さ) form:1 octet で表現。 bit 8 が "0" で残りが長さ
+ *   - long definite (0 ~ 2^1008 -1 の長さ) form: 2 ~ 127 octet で表現。
+ *     - 1st octet の bit 8 が "1" で bits 7-1 が additional length octets の数を表す
+ *     - 256 進数で表現していく、可能な限り少ない桁で。
+ * - Contents octets: value の具体的な表現
+ *
+ * Constructed, definite-length method
+ * - simple string types と structured types 、 implicit tagging で simple string types と
+ * structured types から派生した types と、 explicit tagging で派生した types に適用する
+ * - the value の長さが既知であることが必要
+ * - Identifier octets: 前と一緒で、 bit 6 が "1" で constructed encoding であることを示す。
+ * - Length octets: 前と一緒。
+ *
+ * Constructed, indefinite-length method
+ * - 上と同じだけど the value の値が既知ではない時
+ * - Length octets: one octet 80
+ * - end of contents octets: two octets 00 00
+ *
+ *
+ * [実装]DER に必要なものだけ実装していく。
+ */
+const DER = {
+    encode: (asn1) => {
+        const der = encode(asn1);
+        return CONCAT(der.id, der.len, der.contents);
+    },
+    decode: (der, t) => decode(der, t).asn1,
+};
+
 function BASE64(OCTETS) {
     // window 組み込みの base64 encode 関数
     // 組み込みの関数は引数としてバイナリ文字列を要求するため
@@ -904,12 +1051,12 @@ function BASE64(OCTETS) {
     return base64_encode;
 }
 const eq = (x, y) => {
-    console.log(x, '===', y, '?', eqASN1Type(x, y));
-    console.log(`${JSON.stringify(y)} === ${JSON.stringify(x)} ? ${eqASN1Type(y, x)}`);
+    console.log(x, '===', y, '?', eqType(x, y));
+    console.log(`${JSON.stringify(y)} === ${JSON.stringify(x)} ? ${eqType(y, x)}`);
 };
 console.group('NULL check');
 eq('NULL', { ANY: {} });
-const asn1_null = { t: 'NULL', v: undefined };
+const asn1_null = { type: 'NULL', value: undefined };
 const der_null = DER.encode(asn1_null);
 console.log(der_null, BASE64(der_null));
 const decoded_null = DER.decode(der_null, 'NULL');
@@ -917,7 +1064,7 @@ console.log(decoded_null);
 console.groupEnd();
 console.group('BOOLEAN check');
 eq('BOOLEAN', { ANY: {} });
-const asn1_boolean = { t: 'BOOLEAN', v: true };
+const asn1_boolean = { type: 'BOOLEAN', value: true };
 const der_boolean = DER.encode(asn1_boolean);
 console.log(der_boolean, BASE64(der_boolean));
 const decoded_boolean = DER.decode(der_boolean, 'BOOLEAN');
@@ -925,7 +1072,7 @@ console.log(decoded_boolean);
 console.groupEnd();
 console.group('INTEGER check');
 eq('INTEGER', { ANY: {} });
-const asn1_integer = { t: 'INTEGER', v: -129n };
+const asn1_integer = { type: 'INTEGER', value: -129n };
 const der_integer = DER.encode(asn1_integer);
 console.log(der_integer, BASE64(der_integer));
 const decoded_integer = DER.decode(der_integer, 'INTEGER');
@@ -934,8 +1081,8 @@ console.groupEnd();
 console.group('BIT STRING check');
 eq('BIT STRING', { ANY: {} });
 const asn1_bitstring = {
-    t: 'BIT STRING',
-    v: new Uint8Array([
+    type: 'BIT STRING',
+    value: new Uint8Array([
         4, 41, 151, 167, 198, 65, 127, 192, 13, 155, 232, 1, 27, 86, 198, 242, 82, 165, 186, 45, 178,
         18, 232, 210, 46, 215, 250, 201, 197, 216, 170, 109, 31, 115, 129, 59, 59, 152, 107, 57, 124,
         51, 165, 197, 78, 134, 142, 128, 23, 104, 98, 69, 87, 125, 68, 88, 29, 179, 55, 229, 103, 8,
@@ -949,8 +1096,8 @@ console.log(decoded_bitstring);
 console.groupEnd();
 console.group('OCTET STRING check');
 const asn1_octetstring = {
-    t: 'OCTET STRING',
-    v: new Uint8Array([48, 3, 1, 1, 255]),
+    type: 'OCTET STRING',
+    value: new Uint8Array([48, 3, 1, 1, 255]),
 };
 const der_octetstring = DER.encode(asn1_octetstring);
 console.log(der_octetstring, BASE64(der_octetstring));
@@ -959,8 +1106,8 @@ console.log(decoded_octetstring);
 console.groupEnd();
 console.group('OBJECT IDENTIFIER check');
 const asn1_oid = {
-    t: 'OBJECT IDENTIFIER',
-    v: [1, 2, 840, 10045, 4, 3, 2],
+    type: 'OBJECT IDENTIFIER',
+    value: [1, 2, 840, 10045, 4, 3, 2],
 };
 const der_oid = DER.encode(asn1_oid);
 console.log(der_oid, BASE64(der_oid));
@@ -969,8 +1116,8 @@ console.log(decoded_oid);
 console.groupEnd();
 console.group('UTCTime check');
 const asn1_utctime = {
-    t: 'UTCTime',
-    v: new Date(Date.UTC(2015, 5 - 1, 26)),
+    type: 'UTCTime',
+    value: new Date(Date.UTC(2015, 5 - 1, 26)),
 };
 const der_utctime = DER.encode(asn1_utctime);
 console.log(der_utctime, BASE64(der_utctime));
@@ -978,10 +1125,10 @@ const decoded_utctime = DER.decode(der_utctime, 'UTCTime');
 console.log(decoded_utctime);
 console.groupEnd();
 console.group('IMPLICIT check');
-const implicitTagged = ASN1ImplicitTag(23, 'INTEGER');
+const implicitTagged = ImplicitTag(23, 'INTEGER');
 const asn1_implicitTagged = {
-    t: implicitTagged,
-    v: { v: 65535n },
+    type: implicitTagged,
+    value: { IMPLICIT: 65535n },
 };
 const der_implicitTagged = DER.encode(asn1_implicitTagged);
 console.log(der_implicitTagged, BASE64(der_implicitTagged));
@@ -989,10 +1136,10 @@ const decoded_implicitTagged = DER.decode(der_implicitTagged, implicitTagged);
 console.log(decoded_implicitTagged);
 console.groupEnd();
 console.group('EXPLICIT check');
-const explicitTagged = ASN1ExplicitTag(18, 'INTEGER');
+const explicitTagged = ExplicitTag(18, 'INTEGER');
 const asn1_explicitTagged = {
-    t: explicitTagged,
-    v: { v: 12345n },
+    type: explicitTagged,
+    value: { EXPLICIT: 12345n },
 };
 const der_explicitTagged = DER.encode(asn1_explicitTagged);
 console.log(der_explicitTagged, BASE64(der_explicitTagged));
@@ -1000,14 +1147,14 @@ const decoded_explicitTagged = DER.decode(der_explicitTagged, explicitTagged);
 console.log(decoded_explicitTagged);
 console.groupEnd();
 console.group('SEQUENCE check');
-const sequence = ASN1SEQUENCE({
-    version: ASN1ExplicitTag(0, 'INTEGER'),
+const sequence = SEQUENCE({
+    version: ExplicitTag(0, 'INTEGER'),
     serialNumber: 'INTEGER',
 }, ['version', 'serialNumber']);
 const asn1_sequence = {
-    t: sequence,
-    v: {
-        version: { v: 2n },
+    type: sequence,
+    value: {
+        version: { EXPLICIT: 2n },
         serialNumber: 143266986699090766294700635381230934788665930n,
     },
 };
@@ -1017,10 +1164,10 @@ const decoded_sequence = DER.decode(der_sequence, sequence);
 console.log(decoded_sequence);
 console.groupEnd();
 console.group('SEQUENCE OF Check');
-const sequenceof = ASN1SEQUENCEOF('INTEGER');
+const sequenceof = SEQUENCEOF('INTEGER');
 const asn1_sequenceof = {
-    t: sequenceof,
-    v: [1n, 2n, 3n, 65535n, 5n, 143266986699090766294700635381230934788665930n],
+    type: sequenceof,
+    value: [1n, 2n, 3n, 65535n, 5n, 143266986699090766294700635381230934788665930n],
 };
 const der_sequenceof = DER.encode(asn1_sequenceof);
 console.log(der_sequenceof, BASE64(der_sequenceof));
@@ -1028,10 +1175,10 @@ const decoded_sequenceof = DER.decode(der_sequenceof, sequenceof);
 console.log(decoded_sequenceof);
 console.groupEnd();
 console.group('SET OF Check');
-const setof = ASN1SETOF('INTEGER');
+const setof = SETOF('INTEGER');
 const asn1_setof = {
-    t: setof,
-    v: new Set([2n, 1n, 3n, 65535n, 5n, 143266986699090766294700635381230934788665930n]),
+    type: setof,
+    value: new Set([2n, 1n, 3n, 65535n, 5n, 143266986699090766294700635381230934788665930n]),
 };
 const der_setof = DER.encode(asn1_setof);
 console.log(der_setof, BASE64(der_setof));
@@ -1039,10 +1186,10 @@ const decoded_setof = DER.decode(der_setof, setof);
 console.log(decoded_setof);
 console.groupEnd();
 console.group('CHOICE Check');
-const choice = ASN1CHOICE({ a: 'INTEGER', b: ASN1ExplicitTag(7, 'NULL') });
+const choice = CHOICE({ a: 'INTEGER', b: ExplicitTag(7, 'NULL') });
 const asn1_choice = {
-    t: choice,
-    v: { v: { v: undefined } },
+    type: choice,
+    value: { CHOICE: { EXPLICIT: undefined } },
 };
 const der_choice = DER.encode(asn1_choice);
 console.log(der_choice, BASE64(der_choice));
@@ -1050,7 +1197,7 @@ const decoded_choice = DER.decode(der_choice, choice);
 console.log(decoded_choice);
 console.groupEnd();
 console.group('X509 Certificate');
-const AlgorithmIdentifier = ASN1SEQUENCE({
+const AlgorithmIdentifier = SEQUENCE({
     algorithm: 'OBJECT IDENTIFIER',
     parameters: {
         OPTIONAL: { ANY: { DEFIEND_BY: 'algorithm', typeDerive: () => 'OBJECT IDENTIFIER' } },
@@ -1058,10 +1205,10 @@ const AlgorithmIdentifier = ASN1SEQUENCE({
 }, ['algorithm', 'parameters']);
 console.group('X509 AlgorithmIdentifier');
 const asn1_aid = {
-    t: AlgorithmIdentifier,
-    v: {
+    type: AlgorithmIdentifier,
+    value: {
         algorithm: [1, 2, 840, 10045, 2, 1],
-        parameters: { v: [1, 2, 840, 10045, 3, 1, 7] },
+        parameters: { ANY: [1, 2, 840, 10045, 3, 1, 7] },
     },
 };
 const der_aid = DER.encode(asn1_aid);
@@ -1069,40 +1216,40 @@ console.log(der_aid, BASE64(der_aid));
 const decoded_aid = DER.decode(der_aid, AlgorithmIdentifier);
 console.log(decoded_aid);
 console.groupEnd();
-const AttributeTypeAndValue = ASN1SEQUENCE({
+const AttributeTypeAndValue = SEQUENCE({
     type: 'OBJECT IDENTIFIER',
     value: { ANY: { DEFIEND_BY: 'type', typeDerive: () => 'OCTET STRING' } },
 }, ['type', 'value']);
-const RelativeDistinguishedName = ASN1SETOF(AttributeTypeAndValue);
-const RDNSequence = ASN1SEQUENCEOF(RelativeDistinguishedName);
-const Name = ASN1CHOICE({ rdnSequence: RDNSequence });
-const Time = ASN1CHOICE({
+const RelativeDistinguishedName = SETOF(AttributeTypeAndValue);
+const RDNSequence = SEQUENCEOF(RelativeDistinguishedName);
+const Name = CHOICE({ rdnSequence: RDNSequence });
+const Time = CHOICE({
     utcTime: 'UTCTime',
     // generalTime: 'GeneralizedTime'
 });
-const Validity = ASN1SEQUENCE({ notBefore: Time, notAfter: Time }, ['notBefore', 'notAfter']);
-const SubjectPublicKeyInfo = ASN1SEQUENCE({
+const Validity = SEQUENCE({ notBefore: Time, notAfter: Time }, ['notBefore', 'notAfter']);
+const SubjectPublicKeyInfo = SEQUENCE({
     algorithm: AlgorithmIdentifier,
     subjectPublicKey: 'BIT STRING',
 }, ['algorithm', 'subjectPublicKey']);
 const UniqueIdentifier = 'BIT STRING';
-const Extension = ASN1SEQUENCE({
+const Extension = SEQUENCE({
     extnID: 'OBJECT IDENTIFIER',
     critical: 'BOOLEAN',
     extnValue: 'OCTET STRING',
 }, ['extnID', 'critical', 'extnValue']);
-const Extensions = ASN1SEQUENCEOF(Extension);
-const TBSCertificate = ASN1SEQUENCE({
-    version: ASN1ExplicitTag(0, 'INTEGER'),
+const Extensions = SEQUENCEOF(Extension);
+const TBSCertificate = SEQUENCE({
+    version: ExplicitTag(0, 'INTEGER'),
     serialNumber: 'INTEGER',
     signature: AlgorithmIdentifier,
     issuer: Name,
     validity: Validity,
     subject: Name,
     subjectPublicKeyInfo: SubjectPublicKeyInfo,
-    issuerUniqueID: { OPTIONAL: ASN1ImplicitTag(1, UniqueIdentifier) },
-    subjectUniqueID: { OPTIONAL: ASN1ImplicitTag(2, UniqueIdentifier) },
-    extensions: { OPTIONAL: ASN1ImplicitTag(3, Extensions) },
+    issuerUniqueID: { OPTIONAL: ImplicitTag(1, UniqueIdentifier) },
+    subjectUniqueID: { OPTIONAL: ImplicitTag(2, UniqueIdentifier) },
+    extensions: { OPTIONAL: ImplicitTag(3, Extensions) },
 }, [
     'version',
     'serialNumber',
@@ -1115,40 +1262,40 @@ const TBSCertificate = ASN1SEQUENCE({
     'subjectUniqueID',
     'extensions',
 ]);
-const Certificate = ASN1SEQUENCE({
+const Certificate = SEQUENCE({
     tbsCertificate: TBSCertificate,
     signatureAlgorithm: AlgorithmIdentifier,
     signatureValue: 'BIT STRING',
 }, ['tbsCertificate', 'signatureAlgorithm', 'signatureValue']);
 const asn1_crt = {
-    t: Certificate,
-    v: {
+    type: Certificate,
+    value: {
         tbsCertificate: {
-            version: { v: 2n },
+            version: { EXPLICIT: 2n },
             serialNumber: 143266986699090766294700635381230934788665930n,
             signature: { algorithm: [1, 2, 840, 10045, 4, 3, 2] },
             issuer: {
-                v: [
-                    new Set([{ type: [2, 5, 4, 6], value: { v: UTF8('US') } }]),
-                    new Set([{ type: [2, 5, 4, 10], value: { v: UTF8('Amazon') } }]),
-                    new Set([{ type: [2, 5, 4, 3], value: { v: UTF8('Amazon Root CA 3') } }]),
+                CHOICE: [
+                    new Set([{ type: [2, 5, 4, 6], value: { ANY: UTF8('US') } }]),
+                    new Set([{ type: [2, 5, 4, 10], value: { ANY: UTF8('Amazon') } }]),
+                    new Set([{ type: [2, 5, 4, 3], value: { ANY: UTF8('Amazon Root CA 3') } }]),
                 ],
             },
             validity: {
-                notBefore: { v: new Date(Date.UTC(2015, 5 - 1, 26)) },
-                notAfter: { v: new Date(Date.UTC(2040, 5 - 1, 26)) },
+                notBefore: { CHOICE: new Date(Date.UTC(2015, 5 - 1, 26)) },
+                notAfter: { CHOICE: new Date(Date.UTC(2040, 5 - 1, 26)) },
             },
             subject: {
-                v: [
-                    new Set([{ type: [2, 5, 4, 6], value: { v: UTF8('US') } }]),
-                    new Set([{ type: [2, 5, 4, 10], value: { v: UTF8('Amazon') } }]),
-                    new Set([{ type: [2, 5, 4, 3], value: { v: UTF8('Amazon Root CA 3') } }]),
+                CHOICE: [
+                    new Set([{ type: [2, 5, 4, 6], value: { ANY: UTF8('US') } }]),
+                    new Set([{ type: [2, 5, 4, 10], value: { ANY: UTF8('Amazon') } }]),
+                    new Set([{ type: [2, 5, 4, 3], value: { ANY: UTF8('Amazon Root CA 3') } }]),
                 ],
             },
             subjectPublicKeyInfo: {
                 algorithm: {
                     algorithm: [1, 2, 840, 10045, 2, 1],
-                    parameters: { v: [1, 2, 840, 10045, 3, 1, 7] },
+                    parameters: { ANY: [1, 2, 840, 10045, 3, 1, 7] },
                 },
                 subjectPublicKey: new Uint8Array([
                     4, 41, 151, 167, 198, 65, 127, 192, 13, 155, 232, 1, 27, 86, 198, 242, 82, 165, 186, 45,
